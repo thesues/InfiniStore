@@ -42,9 +42,11 @@ SendBuffer::~SendBuffer() {
     }
 }
 
-Connection::~Connection() {
-    INFO("destroying connection");
-
+/*
+because python will always hold GIL when doing ~Connection(), which could lead to deadlock,
+so we have to explicitly call close() to stop cq_handler.
+*/
+void Connection::close_conn() {
     if (!stop_ && cq_future_.valid()) {
         stop_ = true;
 
@@ -73,14 +75,23 @@ Connection::~Connection() {
         cq_future_.get();
     }
 
+    if (sock_) {
+        close(sock_);
+    }
+}
+
+Connection::~Connection() {
+    INFO("destroying connection");
+
+    if (!stop_ && cq_future_.valid()) {
+        WARN("user should call close() before destroying connection, segmenation fault may occur");
+        // throw std::runtime_error("user should call close() before destroying connection");
+    }
+
     SendBuffer *buffer;
     while (send_buffers_.pop(buffer)) {
         if (buffer)
             delete buffer;
-    }
-
-    if (sock_) {
-        close(sock_);
     }
 
     for (auto it = local_mr_.begin(); it != local_mr_.end(); it++) {
@@ -326,7 +337,7 @@ void Connection::cq_handler() {
                         uint32_t imm_data = ntohl(wc[i].imm_data);
                         INFO("read cache done: Received IMM, imm_data: {}", imm_data);
                         auto *info = reinterpret_cast<rdma_read_commit_info *>(wc[i].wr_id);
-                        info->callback();
+                        info->callback(imm_data);
                         delete info;
                         rdma_inflight_count_--;
                         cv_.notify_all();
@@ -422,7 +433,7 @@ void Connection::cq_handler() {
         else {
             // TODO: gracefull shutdown
             if (errno != EINTR) {
-                ERROR("Failed to get CQ event {}", strerror(errno));
+                WARN("Failed to get CQ event {}", strerror(errno));
                 return;
             }
         }
@@ -488,6 +499,7 @@ int Connection::setup_rdma(client_config_t config) {
 
     rdma_inflight_count_ = 0;
     stop_ = false;
+
     cq_future_ = std::async(std::launch::async, [this]() { cq_handler(); });
     return 0;
 }
@@ -793,8 +805,7 @@ int Connection::allocate_rdma_async(std::vector<std::string> &keys, int block_si
     recv_sge.lkey = recv_mr_->lkey;
 
     // build a new callback function:
-    auto self = shared_from_this();
-    auto *f_ptr = new std::function<void()>([this, self, callback]() {
+    auto *f_ptr = new std::function<void()>([this, callback]() {
         const RdmaAllocateResponse *resp = GetRdmaAllocateResponse(recv_buffer_);
         INFO("Received allocate response, #keys: {}", resp->blocks()->size());
 
@@ -870,12 +881,13 @@ int Connection::w_rdma_async(unsigned long *p_offsets, size_t offsets_len, int b
     assert(p_remote_blocks != NULL);
     assert(offsets_len == remote_blocks_len);
 
+    INFO("w_rdma, block_size: {}, base_ptr: {}", block_size, base_ptr);
+
     if (!local_mr_.count((uintptr_t)base_ptr)) {
-        ERROR("Please register memory first");
+        ERROR("Please register memory first {}", (uint64_t)base_ptr);
         return -1;
     }
 
-    INFO("w_rdma, block_size: {}, base_ptr: {}", block_size, base_ptr);
     struct ibv_mr *mr = local_mr_[(uintptr_t)base_ptr];
 
     std::unique_lock<std::mutex> lock(rdma_post_send_mutex_);
@@ -892,8 +904,7 @@ int Connection::w_rdma_async(unsigned long *p_offsets, size_t offsets_len, int b
 
     bool wr_full = false;
 
-    auto self = shared_from_this();
-    auto *info = new rdma_write_commit_info([self, callback]() { callback(); }, remote_blocks_len);
+    auto *info = new rdma_write_commit_info([callback]() { callback(); }, remote_blocks_len);
 
     if (outstanding_rdma_writes_ + max_wr > MAX_RDMA_WRITE_WR) {
         wr_full = true;
@@ -1003,11 +1014,15 @@ int Connection::w_rdma_async(unsigned long *p_offsets, size_t offsets_len, int b
 }
 
 int Connection::r_rdma(std::vector<block_t> &blocks, int block_size, void *base_ptr) {
-    return r_rdma_async(blocks, block_size, base_ptr, []() {});
+    return r_rdma_async(blocks, block_size, base_ptr, [](unsigned int code) {
+        if (code != 0) {
+            ERROR("Failed to read cache, error code: {}", code);
+        }
+    });
 }
 
 int Connection::r_rdma_async(std::vector<block_t> &blocks, int block_size, void *base_ptr,
-                             std::function<void()> callback) {
+                             std::function<void(unsigned int code)> callback) {
     assert(base_ptr != NULL);
 
     if (!local_mr_.count((uintptr_t)base_ptr)) {
@@ -1026,8 +1041,7 @@ int Connection::r_rdma_async(std::vector<block_t> &blocks, int block_size, void 
         .lkey = recv_mr_->lkey,
     };
 
-    auto self = shared_from_this();
-    auto *info = new rdma_read_commit_info([self, callback]() { callback(); });
+    auto *info = new rdma_read_commit_info([callback](unsigned int code) { callback(code); });
 
     struct ibv_recv_wr recv_wr = {
         .wr_id = (uintptr_t)info,

@@ -31,7 +31,7 @@ struct SendBuffer {
     ~SendBuffer();
 };
 
-class Connection : public std::enable_shared_from_this<Connection> {
+class Connection {
     // tcp socket
     int sock_ = 0;
 
@@ -86,6 +86,8 @@ class Connection : public std::enable_shared_from_this<Connection> {
     Connection(const Connection &) = delete;
     // destory the connection
     ~Connection();
+    // close cq_handler thread
+    void close_conn();
     int init_connection(client_config_t config);
     // async rw local cpu memory, even rw_local returns, it is not guaranteed that
     // the operation is completed until sync_local is recved.
@@ -95,7 +97,7 @@ class Connection : public std::enable_shared_from_this<Connection> {
     int setup_rdma(client_config_t config);
     int r_rdma(std::vector<block_t> &blocks, int block_size, void *base_ptr);
     int r_rdma_async(std::vector<block_t> &blocks, int block_size, void *base_ptr,
-                     std::function<void()> callback);
+                     std::function<void(unsigned int)> callback);
     int w_rdma(unsigned long *p_offsets, size_t offsets_len, int block_size,
                remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr);
     int w_rdma_async(unsigned long *p_offsets, size_t offsets_len, int block_size,
@@ -123,8 +125,8 @@ class Connection : public std::enable_shared_from_this<Connection> {
 
 struct rdma_read_commit_info {
     // call back function.
-    std::function<void()> callback;
-    rdma_read_commit_info(std::function<void()> callback) : callback(callback) {}
+    std::function<void(unsigned int)> callback;
+    rdma_read_commit_info(std::function<void(unsigned int)> callback) : callback(callback) {}
 };
 
 struct rdma_write_commit_info {
