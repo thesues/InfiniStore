@@ -278,6 +278,9 @@ class InfinityConnection:
         self.conn = _infinistore.Connection()
         self.rdma_connected = False
         self.config = config
+
+        # used for async io
+        self.semaphore = asyncio.BoundedSemaphore(32)
         Logger.set_log_level(config.log_level)
 
     async def connect_async(self):
@@ -357,8 +360,11 @@ class InfinityConnection:
 
         future = loop.create_future()
 
+        await self.semaphore.acquire()
+
         def _callback():
             loop.call_soon_threadsafe(future.set_result, 0)
+            self.semaphore.release()
 
         self.conn.w_rdma_async(
             offsets_in_bytes,
@@ -403,6 +409,8 @@ class InfinityConnection:
         if ptr == 0:
             raise Exception("ptr is 0")
 
+        await self.semaphore.acquire()
+
         remote_addrs = await self.allocate_rdma_async([key], size)
 
         loop = asyncio.get_running_loop()
@@ -410,6 +418,7 @@ class InfinityConnection:
 
         def _callback():
             loop.call_soon_threadsafe(future.set_result, 0)
+            self.semaphore.release()
 
         ret = self.conn.w_rdma_async([0], size, remote_addrs, ptr, _callback)
         if ret < 0:
@@ -529,18 +538,21 @@ class InfinityConnection:
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
+        await self.semaphore.acquire()
+
         def _callback(code):
             if code == 404:
                 loop.call_soon_threadsafe(
                     future.set_exception, InfiniStoreKeyNotFound("some keys not found")
                 )
-            elif code != 0:
+            elif code != 200:
                 loop.call_soon_threadsafe(
                     future.set_exception,
                     Exception(f"Failed to read to infinistore, ret = {code}"),
                 )
             else:
                 loop.call_soon_threadsafe(future.set_result, code)
+            self.semaphore.release()
 
         ret = self.conn.r_rdma_async(
             blocks_in_bytes,
@@ -584,18 +596,21 @@ class InfinityConnection:
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
+        await self.semaphore.acquire()
+
         def _callback(code):
             if code == 404:
                 loop.call_soon_threadsafe(
                     future.set_exception, InfiniStoreKeyNotFound(f"Key {key} not found")
                 )
-            elif code != 0:
+            elif code != 200:
                 loop.call_soon_threadsafe(
                     future.set_exception,
                     Exception(f"Failed to read to infinistore, ret = {code}"),
                 )
             else:
                 loop.call_soon_threadsafe(future.set_result, code)
+            self.semaphore.release()
 
         ret = self.conn.r_rdma_async([(key, 0)], size, ptr, _callback)
 
@@ -682,7 +697,6 @@ class InfinityConnection:
         """
         ret = 0
         if self.rdma_connected:
-            # ret = _infinistore.sync_rdma(self.conn)
             ret = self.conn.sync_rdma()
         else:
             raise Exception("Not connected to any instance")
