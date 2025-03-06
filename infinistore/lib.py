@@ -375,6 +375,32 @@ class InfinityConnection:
         )
         return await future
 
+    def tcp_write_cache_single(self, key: str, ptr: int, size: int, **kwargs):
+        """
+        Writes a single cache entry to the remote memory using TCP.
+
+        Args:
+            key (str): The key of the cache entry to write.
+            ptr (int): The pointer to the memory location where the data should be written.
+            size (int): The size of the data to write.
+            **kwargs: Additional keyword arguments.
+
+        Raises:
+            Exception: If the key is empty.
+            Exception: If the size is 0.
+            Exception: If the pointer is 0.
+            Exception: If the write operation fails.
+        """
+        if key == "":
+            raise Exception("key is empty")
+        if size == 0:
+            raise Exception("size is 0")
+        if ptr == 0:
+            raise Exception("ptr is 0")
+        ret = self.conn.w_tcp(key, ptr, size)
+        if ret < 0:
+            raise Exception(f"Failed to write to infinistore, ret = {ret}")
+
     async def rdma_write_cache_single_async(
         self, key: str, ptr: int, size: int, **kwargs
     ):

@@ -793,33 +793,6 @@ int Connection::delete_keys(const std::vector<std::string> &keys) {
     return count;
 }
 
-std::vector<remote_block_t> *Connection::allocate_rdma(std::vector<std::string> &keys,
-                                                       int block_size) {
-    // convert allocate_rdma_async to sync version
-    std::promise<void> promise;
-    auto future = promise.get_future();
-    std::vector<remote_block_t> *ret_blocks;
-    allocate_rdma_async(
-        keys, block_size,
-        [&promise, &ret_blocks](std::vector<remote_block_t> *blocks, unsigned int error_code) {
-            ret_blocks = blocks;
-            if (error_code != FINISH) {
-                ERROR("allocate_rdma failed, error_code: {}", error_code);
-            }
-            promise.set_value();
-        });
-
-    auto status = future.wait_for(std::chrono::seconds(5));  // timeout 5s
-    if (status == std::future_status::timeout) {
-        ERROR("allocate_rdma timeout");
-        return nullptr;
-    }
-    else {
-        future.get();
-    }
-    return ret_blocks;
-}
-
 void Connection::post_recv(struct ibv_sge *recv_sge, rdma_info_base *info) {
     struct ibv_recv_wr recv_wr = {0};
     struct ibv_recv_wr *bad_recv_wr = NULL;
@@ -922,10 +895,57 @@ int Connection::allocate_rdma_async(
     return 0;
 }
 
-int Connection::w_rdma(unsigned long *p_offsets, size_t offsets_len, int block_size,
-                       remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr) {
-    return w_rdma_async(p_offsets, offsets_len, block_size, p_remote_blocks, remote_blocks_len,
-                        base_ptr, []() {});
+int Connection::w_tcp(const std::string &key, void *ptr, size_t size) {
+    assert(ptr != NULL);
+
+    FlatBufferBuilder builder(64 << 10);
+    auto req = CreateTCPPayloadRequestDirect(builder, key.c_str(), size, OP_TCP_PUT);
+    builder.Finish(req);
+
+    header_t header = {
+        .magic = MAGIC,
+        .op = OP_TCP_PAYLOAD,
+        .body_size = builder.GetSize(),
+    };
+
+    struct iovec iov[2];
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+
+    iov[0].iov_base = &header;
+    iov[0].iov_len = FIXED_HEADER_SIZE;
+    iov[1].iov_base = builder.GetBufferPointer();
+    iov[1].iov_len = builder.GetSize();
+
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+
+    if (sendmsg(sock_, &msg, MSG_MORE) < 0) {
+        ERROR("w_tcp: Failed to send header");
+        return -1;
+    }
+
+    // reuse iov[0] and msghdr
+    iov[0].iov_base = ptr;
+    iov[0].iov_len = size;
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 1;
+    if (sendmsg(sock_, &msg, 0) < 0) {
+        ERROR("w_tcp: Failed to send payload");
+        return -1;
+    }
+
+    int return_code = 0;
+    if (recv(sock_, &return_code, RETURN_CODE_SIZE, MSG_WAITALL) != RETURN_CODE_SIZE) {
+        ERROR("w_tcp: Failed to receive return code");
+        return -1;
+    }
+    if (return_code != FINISH) {
+        ERROR("w_tcp: Failed to put key: {}, return code: {}", key, return_code);
+        return -1;
+    }
+
+    return 0;
 }
 
 int Connection::w_rdma_async(unsigned long *p_offsets, size_t offsets_len, int block_size,
@@ -974,7 +994,7 @@ int Connection::w_rdma_async(unsigned long *p_offsets, size_t offsets_len, int b
             continue;
         }
 
-        sges[num_wr].addr = (uintptr_t)(base_ptr + p_offsets[i]);
+        sges[num_wr].addr = (uintptr_t)(base_ptr) + p_offsets[i];
         sges[num_wr].length = block_size;
         sges[num_wr].lkey = mr->lkey;
 
@@ -1065,14 +1085,6 @@ int Connection::w_rdma_async(unsigned long *p_offsets, size_t offsets_len, int b
     DEBUG("rdma_inflight_count: {}", rdma_inflight_count_.load());
 
     return 0;
-}
-
-int Connection::r_rdma(std::vector<block_t> &blocks, int block_size, void *base_ptr) {
-    return r_rdma_async(blocks, block_size, base_ptr, [](unsigned int code) {
-        if (code != FINISH) {
-            ERROR("Failed to read cache, error code: {}", code);
-        }
-    });
 }
 
 int Connection::r_rdma_async(std::vector<block_t> &blocks, int block_size, void *base_ptr,

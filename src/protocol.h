@@ -14,6 +14,7 @@
 // local TCP protocols
 #include "delete_keys_generated.h"
 #include "get_match_last_index_generated.h"
+#include "tcp_payload_request_generated.h"
 
 using namespace flatbuffers;
 
@@ -42,6 +43,11 @@ using namespace flatbuffers;
 #define OP_GET_MATCH_LAST_IDX 'M'
 #define OP_DELETE_KEYS 'X'
 #define OP_SIZE 1
+
+#define OP_TCP_PUT 'P'
+#define OP_TCP_GET 'G'
+#define OP_TCP_PAYLOAD 'L'
+
 // please add op name in protocol.cpp
 
 std::string op_name(char op);

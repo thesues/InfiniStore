@@ -2,6 +2,7 @@ import infinistore
 import uuid
 import asyncio
 import ctypes
+import time
 
 
 def generate_uuid():
@@ -11,7 +12,7 @@ def generate_uuid():
 config = infinistore.ClientConfig(
     host_addr="127.0.0.1",
     service_port=12345,
-    log_level="info",
+    log_level="warning",
     connection_type=infinistore.TYPE_RDMA,
     ib_port=1,
     link_type=infinistore.LINK_ETHERNET,
@@ -44,12 +45,20 @@ async def main():
 
     is_exist = await asyncio.to_thread(rdma_conn.check_exist, key)
     assert not is_exist
-    await rdma_conn.rdma_write_cache_single_async(key, get_ptr(src), 100)
 
-    try:
-        await rdma_conn.read_cache_single_async(key, get_ptr(dst), 100)
-    except infinistore.InfiniStoreKeyNotFound:
-        print("Key not found")
+    t = time.time()
+    tasks = []
+    for i in range(4):
+        tasks.append(
+            rdma_conn.rdma_write_cache_single_async(key + str(i), get_ptr(src), 100)
+        )
+    await asyncio.gather(*tasks, return_exceptions=True)
+    print("Time taken: ", time.time() - t)
+
+    # try:
+    #    await rdma_conn.read_cache_single_async(key+"1", get_ptr(dst), 100)
+    # except infinistore.InfiniStoreKeyNotFound:
+    #    print("Key not found")
 
     assert src == dst
 
