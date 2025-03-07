@@ -34,31 +34,42 @@ async def main():
 
     # src = torch.randn(4096, device="cpu", dtype=torch.float32)
     # dst = torch.zeros(4096, device="cpu", dtype=torch.float32)
-    src = bytearray(100)
-    dst = memoryview(bytearray(100))
+    size = 128 * 10240
+    src = bytearray(size)
+    dst = memoryview(bytearray(size))
 
     def register_mr():
-        rdma_conn.register_mr(get_ptr(src), 100)
-        rdma_conn.register_mr(get_ptr(dst), 100)
+        rdma_conn.register_mr(get_ptr(src), len(src))
+        rdma_conn.register_mr(get_ptr(dst), len(dst))
 
     await asyncio.to_thread(register_mr)
 
     is_exist = await asyncio.to_thread(rdma_conn.check_exist, key)
     assert not is_exist
 
-    t = time.time()
+    now = time.time()
     tasks = []
-    for i in range(4):
-        tasks.append(
-            rdma_conn.rdma_write_cache_single_async(key + str(i), get_ptr(src), 100)
+    for i in range(1000):
+        await rdma_conn.rdma_write_cache_single_async(
+            key + str(i), get_ptr(src), len(src)
         )
-    await asyncio.gather(*tasks, return_exceptions=True)
-    print("Time taken: ", time.time() - t)
 
+    # await asyncio.gather(*tasks, return_exceptions=True)
+    print("write Time taken: ", time.time() - now)
+
+    now = time.time()
+    tasks = []
+    for i in range(1000):
+        tasks.append(
+            rdma_conn.read_cache_single_async(key + str(i), get_ptr(dst), len(dst))
+        )
     # try:
-    #    await rdma_conn.read_cache_single_async(key+"1", get_ptr(dst), 100)
+    #     await rdma_conn.read_cache_single_async(key+"0", get_ptr(dst), len(dst))
     # except infinistore.InfiniStoreKeyNotFound:
-    #    print("Key not found")
+    #     print("Key not found")
+
+    await asyncio.gather(*tasks, return_exceptions=True)
+    print("read Time taken: ", time.time() - now)
 
     assert src == dst
 

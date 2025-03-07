@@ -281,7 +281,7 @@ class InfinityConnection:
         self.config = config
 
         # used for async io
-        self.semaphore = asyncio.BoundedSemaphore(32)
+        self.semaphore = asyncio.BoundedSemaphore(1024)
         Logger.set_log_level(config.log_level)
 
     async def connect_async(self):
@@ -626,7 +626,7 @@ class InfinityConnection:
         loop = asyncio.get_running_loop()
         future = loop.create_future()
 
-        await self.semaphore.acquire()
+        # await self.semaphore.acquire()
 
         def _callback(code):
             if code == 404:
@@ -640,7 +640,7 @@ class InfinityConnection:
                 )
             else:
                 loop.call_soon_threadsafe(future.set_result, code)
-            self.semaphore.release()
+            # self.semaphore.release()
 
         ret = self.conn.r_rdma_async([(key, 0)], size, ptr, _callback)
 

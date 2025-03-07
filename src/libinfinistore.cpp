@@ -918,7 +918,7 @@ std::vector<unsigned char> *Connection::r_tcp(const std::string &key) {
     msg.msg_iov = iov;
     msg.msg_iovlen = 2;
 
-    if (sendmsg(sock_, &msg, MSG_MORE) < 0) {
+    if (sendmsg(sock_, &msg, 0) < 0) {
         ERROR("r_tcp: Failed to send header");
         return nullptr;
     }
@@ -948,8 +948,6 @@ std::vector<unsigned char> *Connection::r_tcp(const std::string &key) {
         ERROR("r_tcp: Failed to receive payload");
         return nullptr;
     }
-
-    INFO("r_tcp: Received payload, : {}, size: {}", (uint32_t)ret_buf->at(19), size);
     return ret_buf;
 }
 

@@ -202,12 +202,12 @@ void on_chunk_write(uv_write_t *req, int status) {
     }
 
     if (ctx->offset == ctx->total_size) {
+        INFO("write done");
         ctx->client->reset_client_read_state();
         free(req);
         delete ctx;
         return;
     }
-
     size_t remain = ctx->total_size - ctx->offset;
     size_t send_size = MIN(remain, MAX_SEND_SIZE);
     uv_buf_t buf = uv_buf_init((char *)ctx->ptr->ptr + ctx->offset, send_size);
@@ -245,10 +245,12 @@ int Client::tcp_payload_request(const TCPPayloadRequest *req) {
 
     switch (req->op()) {
         case OP_TCP_PUT: {
-            INFO("TCP PUT");
+            // if (kv_map.count(req->key()->str()) != 0) {
+            //     WARN("Key already exists: {}", req->key()->str());
+            //     return KEY_ALREADY_EXIST;
+            // }
             int ret = mm->allocate(req->value_length(), 1,
                                    [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
-                                       // TODO: deduplicate key
                                        current_tcp_task_ = boost::intrusive_ptr<PTR>(
                                            new PTR(addr, req->value_length(), pool_idx, false));
                                    });
@@ -293,8 +295,8 @@ int Client::tcp_payload_request(const TCPPayloadRequest *req) {
 
             uv_buf_t buf = uv_buf_init((char *)header_buf, sizeof(uint32_t) * 2);
 
-            INFO("write header");
             uv_write(write_req, (uv_stream_t *)handle_, &buf, 1, on_head_write);
+
             break;
         }
     }
