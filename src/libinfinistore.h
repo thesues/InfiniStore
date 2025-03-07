@@ -137,11 +137,14 @@ class Connection {
                  int device_id);
     int sync_local();
     int setup_rdma(client_config_t config);
+    int r_rdma(std::vector<block_t> &blocks, int block_size, void *base_ptr);
     int r_rdma_async(std::vector<block_t> &blocks, int block_size, void *base_ptr,
                      std::function<void(unsigned int)> callback);
     int w_tcp(const std::string &key, void *ptr, size_t size);
     std::vector<unsigned char> *r_tcp(const std::string &key);
 
+    int w_rdma(unsigned long *p_offsets, size_t offsets_len, int block_size,
+               remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr);
     int w_rdma_async(unsigned long *p_offsets, size_t offsets_len, int block_size,
                      remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr,
                      std::function<void()> callback);

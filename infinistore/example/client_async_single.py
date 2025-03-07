@@ -34,7 +34,7 @@ async def main():
 
     # src = torch.randn(4096, device="cpu", dtype=torch.float32)
     # dst = torch.zeros(4096, device="cpu", dtype=torch.float32)
-    size = 128 * 10240
+    size = 128 * 1024
     src = bytearray(size)
     dst = memoryview(bytearray(size))
 
@@ -50,9 +50,15 @@ async def main():
     now = time.time()
     tasks = []
     for i in range(1000):
+        # tasks.append(
+        #     rdma_conn.rdma_write_cache_single_async(
+        #         key + str(i), get_ptr(src), len(src)
+        #     )
+        # )
         await rdma_conn.rdma_write_cache_single_async(
             key + str(i), get_ptr(src), len(src)
         )
+    # await asyncio.gather(*tasks, return_exceptions=True)
 
     # await asyncio.gather(*tasks, return_exceptions=True)
     print("write Time taken: ", time.time() - now)

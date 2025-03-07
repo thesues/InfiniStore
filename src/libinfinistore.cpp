@@ -793,6 +793,33 @@ int Connection::delete_keys(const std::vector<std::string> &keys) {
     return count;
 }
 
+std::vector<remote_block_t> *Connection::allocate_rdma(std::vector<std::string> &keys,
+                                                       int block_size) {
+    // convert allocate_rdma_async to sync version
+    std::promise<void> promise;
+    auto future = promise.get_future();
+    std::vector<remote_block_t> *ret_blocks;
+    allocate_rdma_async(
+        keys, block_size,
+        [&promise, &ret_blocks](std::vector<remote_block_t> *blocks, unsigned int error_code) {
+            ret_blocks = blocks;
+            if (error_code != FINISH) {
+                ERROR("allocate_rdma failed, error_code: {}", error_code);
+            }
+            promise.set_value();
+        });
+
+    auto status = future.wait_for(std::chrono::seconds(5));  // timeout 5s
+    if (status == std::future_status::timeout) {
+        ERROR("allocate_rdma timeout");
+        return nullptr;
+    }
+    else {
+        future.get();
+    }
+    return ret_blocks;
+}
+
 void Connection::post_recv(struct ibv_sge *recv_sge, rdma_info_base *info) {
     struct ibv_recv_wr recv_wr = {0};
     struct ibv_recv_wr *bad_recv_wr = NULL;
@@ -1004,6 +1031,12 @@ int Connection::w_tcp(const std::string &key, void *ptr, size_t size) {
     return 0;
 }
 
+int Connection::w_rdma(unsigned long *p_offsets, size_t offsets_len, int block_size,
+                       remote_block_t *p_remote_blocks, size_t remote_blocks_len, void *base_ptr) {
+    return w_rdma_async(p_offsets, offsets_len, block_size, p_remote_blocks, remote_blocks_len,
+                        base_ptr, []() {});
+}
+
 int Connection::w_rdma_async(unsigned long *p_offsets, size_t offsets_len, int block_size,
                              remote_block_t *p_remote_blocks, size_t remote_blocks_len,
                              void *base_ptr, std::function<void()> callback) {
@@ -1141,6 +1174,14 @@ int Connection::w_rdma_async(unsigned long *p_offsets, size_t offsets_len, int b
     DEBUG("rdma_inflight_count: {}", rdma_inflight_count_.load());
 
     return 0;
+}
+
+int Connection::r_rdma(std::vector<block_t> &blocks, int block_size, void *base_ptr) {
+    return r_rdma_async(blocks, block_size, base_ptr, [](unsigned int code) {
+        if (code != FINISH) {
+            ERROR("Failed to read cache, error code: {}", code);
+        }
+    });
 }
 
 int Connection::r_rdma_async(std::vector<block_t> &blocks, int block_size, void *base_ptr,

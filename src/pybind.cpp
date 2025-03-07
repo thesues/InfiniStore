@@ -50,7 +50,27 @@ PYBIND11_MODULE(_infinistore, m) {
         .def(py::init<>())
         .def("close", &Connection::close_conn, py::call_guard<py::gil_scoped_release>(),
              "close the connection")
+        .def(
+            "w_rdma",
+            [](Connection &self,
+               py::array_t<unsigned long, py::array::c_style | py::array::forcecast> offsets,
+               int block_size,
+               py::array_t<remote_block_t, py::array::c_style | py::array::forcecast> remote_blocks,
+               uintptr_t base_ptr) {
+                py::buffer_info block_buf = remote_blocks.request();
+                py::buffer_info offset_buf = offsets.request();
 
+                assert(block_buf.ndim == 1);
+                assert(offset_buf.ndim == 1);
+
+                remote_block_t *p_remote_blocks = static_cast<remote_block_t *>(block_buf.ptr);
+                unsigned long *p_offsets = static_cast<unsigned long *>(offset_buf.ptr);
+                size_t remote_blocks_len = block_buf.shape[0];
+                size_t offsets_len = offset_buf.shape[0];
+                return self.w_rdma(p_offsets, offsets_len, block_size, p_remote_blocks,
+                                   remote_blocks_len, (void *)base_ptr);
+            },
+            "Write remote memory")
         .def(
             "r_rdma_async",
             [](Connection &self, const std::vector<std::tuple<std::string, unsigned long>> &blocks,
@@ -102,6 +122,18 @@ PYBIND11_MODULE(_infinistore, m) {
             },
             "Write remote memory asynchronously")
 
+        .def(
+            "allocate_rdma",
+            [](Connection &self, std::vector<std::string> &keys, int block_size) {
+                std::vector<remote_block_t> *blocks = self.allocate_rdma(keys, block_size);
+                // throw python exception if blocks is nullptr
+                if (blocks == nullptr) {
+                    throw std::runtime_error("Failed to allocate remote memory");
+                }
+                py::gil_scoped_acquire acquire;
+                return as_pyarray(std::move(*blocks));
+            },
+            py::call_guard<py::gil_scoped_release>(), "Allocate remote memory")
         .def(
             "allocate_rdma_async",
             [](Connection &self, std::vector<std::string> &keys, int block_size,

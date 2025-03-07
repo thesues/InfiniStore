@@ -51,7 +51,8 @@ typedef enum {
     READ_VALUE_THROUGH_TCP,
 } read_state_t;
 
-static const size_t MAX_SEND_SIZE = 256 * 1024;
+// the max data could be send in uv_write
+static const size_t MAX_SEND_SIZE = 256 << 10;
 
 struct Client {
     uv_tcp_t *handle_ = NULL;    // uv_stream_t
@@ -230,9 +231,9 @@ void on_head_write(uv_write_t *req, int status) {
     }
 
     INFO("header write done");
-    size_t remain = ctx->total_size - ctx->offset;
+    size_t remain = ctx->total_size;
     size_t send_size = MIN(remain, MAX_SEND_SIZE);
-    uv_buf_t buf = uv_buf_init((char *)ctx->ptr->ptr, ctx->total_size - ctx->offset);
+    uv_buf_t buf = uv_buf_init((char *)ctx->ptr->ptr, send_size);
     ctx->offset += send_size;
     uv_write_t *write_req = (uv_write_t *)malloc(sizeof(uv_write_t));
     write_req->data = ctx;
@@ -241,14 +242,10 @@ void on_head_write(uv_write_t *req, int status) {
 }
 
 int Client::tcp_payload_request(const TCPPayloadRequest *req) {
-    INFO("do tcp_payload_request...");
+    INFO("do tcp_payload_request... {}", op_name(req->op()));
 
     switch (req->op()) {
         case OP_TCP_PUT: {
-            // if (kv_map.count(req->key()->str()) != 0) {
-            //     WARN("Key already exists: {}", req->key()->str());
-            //     return KEY_ALREADY_EXIST;
-            // }
             int ret = mm->allocate(req->value_length(), 1,
                                    [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
                                        current_tcp_task_ = boost::intrusive_ptr<PTR>(
@@ -270,7 +267,6 @@ int Client::tcp_payload_request(const TCPPayloadRequest *req) {
             break;
         }
         case OP_TCP_GET: {
-            INFO("TCP GET");
             auto it = kv_map.find(req->key()->str());
             if (it == kv_map.end()) {
                 return KEY_NOT_FOUND;
@@ -1031,7 +1027,6 @@ int Client::delete_keys(const DeleteKeysRequest *request) {
 void handle_request(uv_stream_t *stream, client_t *client) {
     auto start = std::chrono::high_resolution_clock::now();
     int error_code = 0;
-    int op = client->header_.op;
     // if error_code is not 0, close the connection
     switch (client->header_.op) {
         case OP_RDMA_EXCHANGE: {
