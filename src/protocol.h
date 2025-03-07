@@ -27,7 +27,7 @@ using namespace flatbuffers;
 
 // how many RDMA write requests can be outstanding, this should be bigger than MAX_WR_BATCH and less
 // than MAX_SEND_WR
-#define MAX_RDMA_WRITE_WR 7000
+#define MAX_RDMA_WRITE_WR 8000
 
 // every MAX_WR_BATCH RDMA write requests will have a RDMA_SIGNAL
 #define MAX_WR_BATCH 32

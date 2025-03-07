@@ -51,16 +51,14 @@ async def main():
     tasks = []
     for i in range(1000):
         # tasks.append(
-        #     rdma_conn.rdma_write_cache_single_async(
-        #         key + str(i), get_ptr(src), len(src)
-        #     )
+        #    rdma_conn.rdma_write_cache_single_async(
+        #        key + str(i), get_ptr(src), len(src)
+        #    )
         # )
         await rdma_conn.rdma_write_cache_single_async(
             key + str(i), get_ptr(src), len(src)
         )
-    # await asyncio.gather(*tasks, return_exceptions=True)
-
-    # await asyncio.gather(*tasks, return_exceptions=True)
+    await asyncio.gather(*tasks, return_exceptions=True)
     print("write Time taken: ", time.time() - now)
 
     now = time.time()
@@ -69,11 +67,6 @@ async def main():
         tasks.append(
             rdma_conn.read_cache_single_async(key + str(i), get_ptr(dst), len(dst))
         )
-    # try:
-    #     await rdma_conn.read_cache_single_async(key+"0", get_ptr(dst), len(dst))
-    # except infinistore.InfiniStoreKeyNotFound:
-    #     print("Key not found")
-
     await asyncio.gather(*tasks, return_exceptions=True)
     print("read Time taken: ", time.time() - now)
 
