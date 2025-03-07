@@ -51,6 +51,17 @@ PYBIND11_MODULE(_infinistore, m) {
         .def("close", &Connection::close_conn, py::call_guard<py::gil_scoped_release>(),
              "close the connection")
         .def(
+            "r_rdma",
+            [](Connection &self, const std::vector<std::tuple<std::string, unsigned long>> &blocks,
+               int block_size, uintptr_t ptr) {
+                std::vector<block_t> c_blocks;
+                for (const auto &block : blocks) {
+                    c_blocks.push_back(block_t{std::get<0>(block), std::get<1>(block)});
+                }
+                return self.r_rdma(c_blocks, block_size, (void *)ptr);
+            },
+            py::call_guard<py::gil_scoped_release>(), "Read remote memory")
+        .def(
             "w_rdma",
             [](Connection &self,
                py::array_t<unsigned long, py::array::c_style | py::array::forcecast> offsets,
