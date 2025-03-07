@@ -8,6 +8,7 @@ import subprocess
 import asyncio
 from functools import singledispatchmethod
 from typing import Optional, Union, List, Tuple
+import numpy as np
 
 
 # connection type: default is RDMA
@@ -374,6 +375,9 @@ class InfinityConnection:
             _callback,
         )
         return await future
+
+    def tcp_read_cache_single(self, key: str, **kwargs) -> np.ndarray:
+        return self.conn.r_tcp(key)
 
     def tcp_write_cache_single(self, key: str, ptr: int, size: int, **kwargs):
         """

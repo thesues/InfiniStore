@@ -895,6 +895,64 @@ int Connection::allocate_rdma_async(
     return 0;
 }
 
+std::vector<unsigned char> *Connection::r_tcp(const std::string &key) {
+    FlatBufferBuilder builder(64 << 10);
+    auto req = CreateTCPPayloadRequestDirect(builder, key.c_str(), 0, OP_TCP_GET);
+    builder.Finish(req);
+
+    header_t header = {
+        .magic = MAGIC,
+        .op = OP_TCP_PAYLOAD,
+        .body_size = builder.GetSize(),
+    };
+
+    struct iovec iov[2];
+    struct msghdr msg;
+    memset(&msg, 0, sizeof(msg));
+
+    iov[0].iov_base = &header;
+    iov[0].iov_len = FIXED_HEADER_SIZE;
+    iov[1].iov_base = builder.GetBufferPointer();
+    iov[1].iov_len = builder.GetSize();
+
+    msg.msg_iov = iov;
+    msg.msg_iovlen = 2;
+
+    if (sendmsg(sock_, &msg, MSG_MORE) < 0) {
+        ERROR("r_tcp: Failed to send header");
+        return nullptr;
+    }
+
+    uint32_t buf[2];
+    if (recv(sock_, &buf, RETURN_CODE_SIZE * 2, MSG_WAITALL) != RETURN_CODE_SIZE * 2) {
+        ERROR("r_tcp: Failed to receive return code");
+        return nullptr;
+    }
+
+    int return_code = buf[0];
+    int size = buf[1];
+
+    if (return_code != FINISH) {
+        ERROR("r_tcp: Failed to get value, return code: {}", key, return_code);
+        return nullptr;
+    }
+
+    if (size == 0) {
+        ERROR("r_tcp: size is 0");
+        return nullptr;
+    }
+
+    auto ret_buf = new std::vector<unsigned char>(size);
+
+    if (recv(sock_, ret_buf->data(), size, MSG_WAITALL) != size) {
+        ERROR("r_tcp: Failed to receive payload");
+        return nullptr;
+    }
+
+    INFO("r_tcp: Received payload, : {}, size: {}", (uint32_t)ret_buf->at(19), size);
+    return ret_buf;
+}
+
 int Connection::w_tcp(const std::string &key, void *ptr, size_t size) {
     assert(ptr != NULL);
 

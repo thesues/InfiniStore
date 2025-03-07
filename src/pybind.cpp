@@ -70,6 +70,14 @@ PYBIND11_MODULE(_infinistore, m) {
             },
             py::call_guard<py::gil_scoped_release>(), "Write remote memory using TCP")
         .def(
+            "r_tcp",
+            [](Connection &self, const std::string &key) {
+                auto vector_ptr = self.r_tcp(key);
+                py::gil_scoped_acquire acquire;
+                return as_pyarray(std::move(*vector_ptr));
+            },
+            py::call_guard<py::gil_scoped_release>(), "Read remote memory using TCP")
+        .def(
             "w_rdma_async",
             [](Connection &self,
                py::array_t<unsigned long, py::array::c_style | py::array::forcecast> offsets,

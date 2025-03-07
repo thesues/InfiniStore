@@ -183,17 +183,16 @@ void on_close(uv_handle_t *handle) {
     delete client;
 }
 
-
 struct BulkWriteCtx {
-    client_t * client;
-    uint32_t * header_buf;
+    client_t *client;
+    uint32_t *header_buf;
     boost::intrusive_ptr<PTR> ptr;
     size_t offset;
     size_t total_size;
 };
 
-void on_chunk_write (uv_write_t* req, int status) {
-    BulkWriteCtx * ctx = (BulkWriteCtx *)req->data;
+void on_chunk_write(uv_write_t *req, int status) {
+    BulkWriteCtx *ctx = (BulkWriteCtx *)req->data;
     if (status < 0) {
         ERROR("Write error {}", uv_strerror(status));
         uv_close((uv_handle_t *)req->handle, on_close);
@@ -211,7 +210,7 @@ void on_chunk_write (uv_write_t* req, int status) {
 
     size_t remain = ctx->total_size - ctx->offset;
     size_t send_size = MIN(remain, MAX_SEND_SIZE);
-    uv_buf_t buf = uv_buf_init((char*)ctx->ptr->ptr + ctx->offset, send_size);
+    uv_buf_t buf = uv_buf_init((char *)ctx->ptr->ptr + ctx->offset, send_size);
     ctx->offset += send_size;
     uv_write_t *write_req = (uv_write_t *)malloc(sizeof(uv_write_t));
     write_req->data = ctx;
@@ -219,8 +218,8 @@ void on_chunk_write (uv_write_t* req, int status) {
     free(req);
 }
 
-void on_head_write(uv_write_t * req, int status) {
-    BulkWriteCtx * ctx = (BulkWriteCtx *)req->data;
+void on_head_write(uv_write_t *req, int status) {
+    BulkWriteCtx *ctx = (BulkWriteCtx *)req->data;
     if (status < 0) {
         ERROR("Write error {}", uv_strerror(status));
         free(ctx->header_buf);
@@ -233,17 +232,13 @@ void on_head_write(uv_write_t * req, int status) {
     INFO("header write done");
     size_t remain = ctx->total_size - ctx->offset;
     size_t send_size = MIN(remain, MAX_SEND_SIZE);
-    uv_buf_t buf = uv_buf_init((char*)ctx->ptr->ptr, ctx->total_size - ctx->offset);
+    uv_buf_t buf = uv_buf_init((char *)ctx->ptr->ptr, ctx->total_size - ctx->offset);
     ctx->offset += send_size;
     uv_write_t *write_req = (uv_write_t *)malloc(sizeof(uv_write_t));
     write_req->data = ctx;
     uv_write(write_req, (uv_stream_t *)ctx->client->handle_, &buf, 1, on_chunk_write);
     free(req);
-
 }
-
-
-
 
 int Client::tcp_payload_request(const TCPPayloadRequest *req) {
     INFO("do tcp_payload_request...");
@@ -285,23 +280,21 @@ int Client::tcp_payload_request(const TCPPayloadRequest *req) {
 
             uint32_t *header_buf = (uint32_t *)malloc(sizeof(uint32_t) * 2);
             header_buf[0] = FINISH;
-            header_buf[1] = static_cast<uint32_t>(ptr->size); 
+            header_buf[1] = static_cast<uint32_t>(ptr->size);
 
             uv_write_t *write_req = (uv_write_t *)malloc(sizeof(uv_write_t));
 
-            write_req->data = new BulkWriteCtx{
-                .client = this,
-                .header_buf = header_buf,
-                .ptr = ptr,
-                .offset = 0,
-                .total_size = ptr->size
-            };
+            // safe PTR to prevent it from being deleted early.
+            write_req->data = new BulkWriteCtx{.client = this,
+                                               .header_buf = header_buf,
+                                               .ptr = ptr,
+                                               .offset = 0,
+                                               .total_size = ptr->size};
 
-            uv_buf_t buf  = uv_buf_init((char*)header_buf, sizeof(uint32_t) * 2);
-            
-            //capture PTR to prevent it from being deleted early.
-            uv_write(write_req, (uv_stream_t *)handle_, &buf, 1,
-                        on_head_write);
+            uv_buf_t buf = uv_buf_init((char *)header_buf, sizeof(uint32_t) * 2);
+
+            INFO("write header");
+            uv_write(write_req, (uv_stream_t *)handle_, &buf, 1, on_head_write);
             break;
         }
     }
@@ -685,8 +678,6 @@ void Client::reset_client_read_state() {
     memset(&header_, 0, sizeof(header_t));
     // keep the tcp_recv_buffer/tcp_send_buffer as it is
 }
-
-
 
 void alloc_buffer(uv_handle_t *handle, size_t suggested_size, uv_buf_t *buf) {
     buf->base = (char *)malloc(suggested_size);
