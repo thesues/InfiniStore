@@ -97,13 +97,13 @@ Connection::~Connection() {
     }
     local_mr_.clear();
 
-    if (recv_mr_) {
-        ibv_dereg_mr(recv_mr_);
-    }
+    // if (recv_mr_) {
+    //     ibv_dereg_mr(recv_mr_);
+    // }
 
-    if (recv_buffer_) {
-        free(recv_buffer_);
-    }
+    // if (recv_buffer_) {
+    //     free(recv_buffer_);
+    // }
 
     if (qp_) {
         struct ibv_qp_attr attr;
@@ -442,6 +442,16 @@ void Connection::cq_handler() {
     }
 }
 
+SendBuffer *Connection::get_recv_buffer() {
+    assert(!recv_buffers_.empty());
+
+    SendBuffer *buffer;
+    assert(recv_buffers_.pop(buffer));
+    return buffer;
+}
+
+void Connection::release_recv_buffer(SendBuffer *buffer) { recv_buffers_.push(buffer); }
+
 SendBuffer *Connection::get_send_buffer() {
     /*
     if send buffer list is empty,we just report error, and return NULL
@@ -480,23 +490,16 @@ int Connection::setup_rdma(client_config_t config) {
         return -1;
     }
 
-    if (posix_memalign(&recv_buffer_, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
-        ERROR("Failed to allocate recv buffer");
-        return -1;
-    }
-    recv_mr_ = ibv_reg_mr(pd_, recv_buffer_, PROTOCOL_BUFFER_SIZE,
-                          IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-    if (!recv_mr_) {
-        ERROR("Failed to register recv MR");
-        return -1;
-    }
-
     /*
     This is MAX_RECV_WR not MAX_SEND_WR,
     because server also has the same number of buffers
     */
     for (int i = 0; i < MAX_RECV_WR; i++) {
         send_buffers_.push(new SendBuffer(pd_, PROTOCOL_BUFFER_SIZE));
+    }
+
+    for (int i = 0; i < MAX_RECV_WR; i++) {
+        recv_buffers_.push(new SendBuffer(pd_, PROTOCOL_BUFFER_SIZE));
     }
 
     rdma_inflight_count_ = 0;
@@ -860,13 +863,14 @@ int Connection::allocate_rdma_async(
     struct ibv_recv_wr *bad_recv_wr = NULL;
     struct ibv_recv_wr recv_wr = {0};
 
+    auto *recv_buffer = get_recv_buffer();
     // recv all remote addresses
-    recv_sge.addr = (uintptr_t)recv_buffer_;
+    recv_sge.addr = (uintptr_t)recv_buffer->buffer_;
     recv_sge.length = PROTOCOL_BUFFER_SIZE;
-    recv_sge.lkey = recv_mr_->lkey;
+    recv_sge.lkey = recv_buffer->mr_->lkey;
 
-    auto *info = new rdma_allocate_info([this, callback]() {
-        const RdmaAllocateResponse *resp = GetRdmaAllocateResponse(recv_buffer_);
+    auto *info = new rdma_allocate_info([this, callback, recv_buffer]() {
+        const RdmaAllocateResponse *resp = GetRdmaAllocateResponse(recv_buffer->buffer_);
         INFO("Received allocate response, #keys: {}", resp->blocks()->size());
 
         std::vector<remote_block_t> *blocks = new std::vector<remote_block_t>();
@@ -879,6 +883,7 @@ int Connection::allocate_rdma_async(
             blocks->push_back(remote_block);
         }
         callback(blocks, resp->error_code());
+        release_recv_buffer(recv_buffer);
     });
     // build a new callback function:
 

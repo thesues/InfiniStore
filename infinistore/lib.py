@@ -282,7 +282,7 @@ class InfinityConnection:
         self.config = config
 
         # used for async io
-        self.semaphore = asyncio.BoundedSemaphore(128)
+        self.semaphore = asyncio.BoundedSemaphore(1024)
         Logger.set_log_level(config.log_level)
 
     async def connect_async(self):

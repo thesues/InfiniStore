@@ -105,8 +105,9 @@ class Connection {
     // 1. allocate rdma
     // 2. recv IMM data, although IMM DATA is not put into recv_buffer,
     // but for compatibility, we still use a zero-length recv_buffer.
-    void *recv_buffer_ = NULL;
-    struct ibv_mr *recv_mr_ = NULL;
+    // void *recv_buffer_ = NULL;
+    // struct ibv_mr *recv_mr_ = NULL;
+    boost::lockfree::spsc_queue<SendBuffer *> recv_buffers_{MAX_RECV_WR};
 
     struct ibv_comp_channel *comp_channel_ = NULL;
     std::future<void> cq_future_;  // cq thread
@@ -170,6 +171,9 @@ class Connection {
     // TODO: refactor to c++ style
     SendBuffer *get_send_buffer();
     void release_send_buffer(SendBuffer *buffer);
+
+    SendBuffer *get_recv_buffer();
+    void release_recv_buffer(SendBuffer *buffer);
 };
 
 #endif  // LIBINFINISTORE_H

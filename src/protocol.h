@@ -23,7 +23,7 @@ using namespace flatbuffers;
 
 // this is only used for recving RDMA_SEND or IMM data. this should be bigger than max layers of
 // model.
-#define MAX_RECV_WR 128
+#define MAX_RECV_WR 1024
 
 // how many RDMA write requests can be outstanding, this should be bigger than MAX_WR_BATCH and less
 // than MAX_SEND_WR
