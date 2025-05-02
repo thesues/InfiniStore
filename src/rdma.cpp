@@ -5,6 +5,8 @@
 #include "log.h"
 
 int close_rdma_device(struct rdma_device *rdma_dev) {
+    assert(rdma_dev != NULL);
+
     if (rdma_dev->pd) {
         ibv_dealloc_pd(rdma_dev->pd);
     }
@@ -15,8 +17,6 @@ int close_rdma_device(struct rdma_device *rdma_dev) {
 }
 
 int destroy_rdma_context(struct rdma_context *ctx) {
-    assert(ctx->rdma_dev != NULL, "destroy_rdma_context should be called before close_rdma_device");
-
     if (ctx->qp) {
         struct ibv_qp_attr attr;
         memset(&attr, 0, sizeof(attr));
@@ -79,11 +79,13 @@ int open_rdma_device(std::string dev_name, int ib_port, std::string link_type,
         ERROR("Unable to query port {} attributes\n", rdma_dev->ib_port);
         return -1;
     }
+
     if ((port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND && link_type == "Ethernet") ||
         (port_attr.link_layer == IBV_LINK_LAYER_ETHERNET && link_type == "IB")) {
         ERROR("port link layer and config link type don't match");
         return -1;
     }
+
     if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
         rdma_dev->gid_index = -1;
     }
@@ -91,7 +93,7 @@ int open_rdma_device(std::string dev_name, int ib_port, std::string link_type,
         rdma_dev->gid_index =
             ibv_find_sgid_type(rdma_dev->ib_ctx, rdma_dev->ib_port, IBV_GID_TYPE_ROCE_V2, AF_INET);
         if (rdma_dev->gid_index < 0) {
-            ERROR("Failed to find GID");
+            ERROR("Failed to find GID index");
             return -1;
         }
     }
@@ -99,10 +101,9 @@ int open_rdma_device(std::string dev_name, int ib_port, std::string link_type,
     rdma_dev->lid = port_attr.lid;
     rdma_dev->active_mtu = port_attr.active_mtu;
 
-    union ibv_gid gid;
     // get gid
     if (rdma_dev->gid_index != -1 &&
-        ibv_query_gid(rdma_dev->ib_ctx, 1, rdma_dev->gid_index, &gid)) {
+        ibv_query_gid(rdma_dev->ib_ctx, 1, rdma_dev->gid_index, &rdma_dev->gid)) {
         ERROR("Failed to get GID");
         return -1;
     }
@@ -112,14 +113,12 @@ int open_rdma_device(std::string dev_name, int ib_port, std::string link_type,
         ERROR("Failed to allocate PD");
         return -1;
     }
+    return 0;
 }
 
 int init_rdma_context(struct rdma_context *ctx, struct rdma_device *rdma_dev) {
     assert(ctx != NULL);
     assert(rdma_dev != NULL);
-
-    // work like a weak_ptr
-    ctx->rdma_dev = rdma_dev;
 
     ctx->comp_channel = ibv_create_comp_channel(rdma_dev->ib_ctx);
     if (!ctx->comp_channel) {
@@ -157,7 +156,7 @@ int init_rdma_context(struct rdma_context *ctx, struct rdma_device *rdma_dev) {
     }
 
     // Modify QP to INIT state
-    if (modify_qp_to_init(ctx)) {
+    if (modify_qp_to_init(ctx, rdma_dev)) {
         ERROR("Failed to modify QP to INIT, {}", strerror(errno));
         return -1;
     }
@@ -166,7 +165,7 @@ int init_rdma_context(struct rdma_context *ctx, struct rdma_device *rdma_dev) {
     ctx->local_info.qpn = ctx->qp->qp_num;
     ctx->local_info.psn = lrand48() & 0xffffff;
     if (rdma_dev->gid_index != -1) {
-        ctx->local_info.gid = gid;
+        ctx->local_info.gid = rdma_dev->gid;
     }
 
     ctx->local_info.lid = rdma_dev->lid;
@@ -174,10 +173,13 @@ int init_rdma_context(struct rdma_context *ctx, struct rdma_device *rdma_dev) {
     return 0;
 }
 
-int modify_qp_to_init(struct rdma_context *ctx) {
+int modify_qp_to_init(struct rdma_context *ctx, struct rdma_device *rdma_dev) {
+    assert(ctx != NULL);
+    assert(rdma_dev != NULL);
+
     struct ibv_qp_attr attr = {};
     attr.qp_state = IBV_QPS_INIT;
-    attr.port_num = ctx->ib_port;
+    attr.port_num = rdma_dev->ib_port;
     attr.pkey_index = 0;
     attr.qp_access_flags =
         IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE;
@@ -193,6 +195,8 @@ int modify_qp_to_init(struct rdma_context *ctx) {
 }
 
 int modify_qp_to_rts(struct rdma_context *ctx) {
+    assert(ctx != NULL);
+
     struct ibv_qp_attr attr = {};
     attr.qp_state = IBV_QPS_RTS;
     attr.timeout = 14;
@@ -212,18 +216,21 @@ int modify_qp_to_rts(struct rdma_context *ctx) {
     return 0;
 }
 
-int modify_qp_to_rtr(struct rdma_context *ctx) {
+int modify_qp_to_rtr(struct rdma_context *ctx, struct rdma_device *rdma_dev) {
+    assert(ctx != NULL);
+    assert(rdma_dev != NULL);
+
     struct ibv_qp_attr attr = {};
     attr.qp_state = IBV_QPS_RTR;
 
     // update MTU
-    if (ctx->remote_info.mtu != (uint32_t)ctx->active_mtu) {
+    if (ctx->remote_info.mtu != (uint32_t)rdma_dev->active_mtu) {
         INFO("remote MTU: {}, local MTU: {} is not the same, update to minimal MTU",
-             1 << ((uint32_t)ctx->remote_info.mtu + 7), 1 << ((uint32_t)ctx->active_mtu + 7));
+             1 << ((uint32_t)ctx->remote_info.mtu + 7), 1 << ((uint32_t)rdma_dev->active_mtu + 7));
     }
 
     attr.path_mtu =
-        (enum ibv_mtu)std::min((uint32_t)ctx->active_mtu, (uint32_t)ctx->remote_info.mtu);
+        (enum ibv_mtu)std::min((uint32_t)rdma_dev->active_mtu, (uint32_t)ctx->remote_info.mtu);
 
     attr.dest_qp_num = ctx->remote_info.qpn;
     attr.rq_psn = ctx->remote_info.psn;
@@ -232,9 +239,9 @@ int modify_qp_to_rtr(struct rdma_context *ctx) {
     attr.ah_attr.dlid = 0;
     attr.ah_attr.sl = 0;
     attr.ah_attr.src_path_bits = 0;
-    attr.ah_attr.port_num = ctx->ib_port;
+    attr.ah_attr.port_num = rdma_dev->ib_port;
 
-    if (ctx->gid_index == -1) {
+    if (rdma_dev->gid_index == -1) {
         // IB
         attr.ah_attr.dlid = ctx->remote_info.lid;
         attr.ah_attr.is_global = 0;
@@ -243,7 +250,7 @@ int modify_qp_to_rtr(struct rdma_context *ctx) {
         // RoCE v2
         attr.ah_attr.is_global = 1;
         attr.ah_attr.grh.dgid = ctx->remote_info.gid;
-        attr.ah_attr.grh.sgid_index = ctx->gid_index;  // local gid
+        attr.ah_attr.grh.sgid_index = rdma_dev->gid_index;  // local gid
         attr.ah_attr.grh.hop_limit = 1;
     }
 

@@ -76,6 +76,8 @@ class Connection {
     // // local active_mtu attr, after exchanging with remote, we will use the min of the two for
     // // path.mtu
     // ibv_mtu active_mtu_;
+
+    struct rdma_device rdma_dev_;
     struct rdma_context ctx_;
 
     // rdma_conn_info_t local_info_;

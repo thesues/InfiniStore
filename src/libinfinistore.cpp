@@ -97,6 +97,7 @@ Connection::~Connection() {
     local_mr_.clear();
 
     destroy_rdma_context(&ctx_);
+    close_rdma_device(&rdma_dev_);
 
     // if (recv_mr_) {
     //     ibv_dereg_mr(recv_mr_);
@@ -377,7 +378,12 @@ int Connection::setup_rdma(client_config_t config) {
     //     return -1;
     // }
 
-    if (init_rdma_context(config.dev_name, config.ib_port, config.link_type, &ctx_) < 0) {
+    if (open_rdma_device(config.dev_name, config.ib_port, config.link_type, &rdma_dev_) < 0) {
+        ERROR("Failed to open RDMA device");
+        return -1;
+    }
+
+    if (init_rdma_context(&ctx_, &rdma_dev_) < 0) {
         ERROR("Failed to initialize RDMA context");
         return -1;
     }
@@ -391,7 +397,7 @@ int Connection::setup_rdma(client_config_t config) {
     print_rdma_conn_info(&ctx_.local_info, false);
 
     // Modify QP to RTR state
-    if (modify_qp_to_rtr(&ctx_)) {
+    if (modify_qp_to_rtr(&ctx_, &rdma_dev_)) {
         ERROR("Failed to modify QP to RTR");
         return -1;
     }
@@ -406,7 +412,7 @@ int Connection::setup_rdma(client_config_t config) {
     because server also has the same number of buffers
     */
     for (int i = 0; i < MAX_RECV_WR; i++) {
-        send_buffers_.push(new SendBuffer(ctx_.pd, PROTOCOL_BUFFER_SIZE));
+        send_buffers_.push(new SendBuffer(rdma_dev_.pd, PROTOCOL_BUFFER_SIZE));
     }
 
     stop_ = false;
@@ -967,7 +973,7 @@ int Connection::register_mr(void *base_ptr, size_t ptr_region_size) {
         ibv_dereg_mr(local_mr_[(uintptr_t)base_ptr]);
     }
     struct ibv_mr *mr;
-    mr = ibv_reg_mr(ctx_.pd, base_ptr, ptr_region_size,
+    mr = ibv_reg_mr(rdma_dev_.pd, base_ptr, ptr_region_size,
                     IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
     if (!mr) {
         ERROR("Failed to register memory regions, size: {}", ptr_region_size);
