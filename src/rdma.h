@@ -13,7 +13,7 @@ struct rdma_device {
     int ib_port;
     int gid_index;
     union ibv_gid gid;  // RoCE v2
-    int lid;
+    uint16_t lid;
     std::string link_type;  // IB or Ethernet
     ibv_mtu active_mtu;
     rdma_device() : ib_ctx(nullptr), pd(nullptr), ib_port(-1), gid_index(-1), lid(-1) {}
@@ -29,7 +29,7 @@ struct rdma_context {
     rdma_context() : comp_channel(nullptr), cq(nullptr), qp(nullptr) {}
 };
 
-int open_rdma_device(std::string dev_name, int ib_port, std::string link_type,
+int open_rdma_device(std::string dev_name, int ib_port, std::string link_type, int hint_gid_index,
                      struct rdma_device *rdma_dev);
 rdma_conn_info_t get_rdma_conn_info(struct rdma_context *ctx, struct rdma_device *rdma_dev);
 int init_rdma_context(struct rdma_context *ctx, struct rdma_device *rdma_dev);

@@ -3,6 +3,7 @@
 #include <string>
 
 #include "log.h"
+#include "utils.h"
 
 int close_rdma_device(struct rdma_device *rdma_dev) {
     assert(rdma_dev != NULL);
@@ -35,7 +36,7 @@ int destroy_rdma_context(struct rdma_context *ctx) {
     return 0;
 }
 
-int open_rdma_device(std::string dev_name, int ib_port, std::string link_type,
+int open_rdma_device(std::string dev_name, int ib_port, std::string link_type, int hint_gid_index,
                      struct rdma_device *rdma_dev) {
     assert(link_type == "IB" || link_type == "Ethernet");
     assert(rdma_dev != NULL);
@@ -87,26 +88,41 @@ int open_rdma_device(std::string dev_name, int ib_port, std::string link_type,
     }
 
     if (port_attr.link_layer == IBV_LINK_LAYER_INFINIBAND) {
+        // IB
         rdma_dev->gid_index = -1;
+        rdma_dev->lid = port_attr.lid;
+        INFO("IB lid {}", rdma_dev->lid);
     }
     else {
-        rdma_dev->gid_index =
-            ibv_find_sgid_type(rdma_dev->ib_ctx, rdma_dev->ib_port, IBV_GID_TYPE_ROCE_V2, AF_INET);
-        if (rdma_dev->gid_index < 0) {
-            ERROR("Failed to find GID index");
+        // RoCE v2
+        if (hint_gid_index >= 0) {
+            rdma_dev->gid_index = hint_gid_index;
+            WARN("RoCE choose user specified gid index {}", rdma_dev->gid_index);
+        }
+        else {
+            rdma_dev->gid_index = ibv_find_sgid_type(rdma_dev->ib_ctx, rdma_dev->ib_port,
+                                                     IBV_GID_TYPE_ROCE_V2, AF_INET);
+            if (rdma_dev->gid_index < 0) {
+                ERROR("Failed to find GID index");
+                return -1;
+            }
+        }
+
+        if (ibv_query_gid(rdma_dev->ib_ctx, 1, rdma_dev->gid_index, &rdma_dev->gid) < 0) {
+            ERROR("Failed to get GID from index {}", rdma_dev->gid_index);
             return -1;
         }
+
+        // if gid all all zero, return error
+        if (rdma_dev->gid.global.subnet_prefix == 0 && rdma_dev->gid.global.interface_id == 0) {
+            ERROR("GID is all zero");
+            return -1;
+        }
+
+        INFO("gid index {}, gid {}", rdma_dev->gid_index, human_readable_gid(rdma_dev->gid));
     }
 
-    rdma_dev->lid = port_attr.lid;
     rdma_dev->active_mtu = port_attr.active_mtu;
-
-    // get gid
-    if (rdma_dev->gid_index != -1 &&
-        ibv_query_gid(rdma_dev->ib_ctx, 1, rdma_dev->gid_index, &rdma_dev->gid)) {
-        ERROR("Failed to get GID");
-        return -1;
-    }
 
     rdma_dev->pd = ibv_alloc_pd(rdma_dev->ib_ctx);
     if (!rdma_dev->pd) {

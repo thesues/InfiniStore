@@ -378,7 +378,8 @@ int Connection::setup_rdma(client_config_t config) {
     //     return -1;
     // }
 
-    if (open_rdma_device(config.dev_name, config.ib_port, config.link_type, &rdma_dev_) < 0) {
+    if (open_rdma_device(config.dev_name, config.ib_port, config.link_type, config.hint_gid_index,
+                         &rdma_dev_) < 0) {
         ERROR("Failed to open RDMA device");
         return -1;
     }

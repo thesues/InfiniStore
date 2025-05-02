@@ -12,11 +12,12 @@ def generate_uuid():
 config = infinistore.ClientConfig(
     host_addr="127.0.0.1",
     service_port=12345,
-    log_level="warning",
+    log_level="info",
     connection_type=infinistore.TYPE_RDMA,
     ib_port=1,
     link_type=infinistore.LINK_ETHERNET,
     dev_name="mlx5_0",
+    hint_gid_index=6,
 )
 
 

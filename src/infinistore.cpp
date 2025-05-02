@@ -1242,8 +1242,10 @@ int register_server(unsigned long loop_ptr, server_config_t config) {
     // if (init_rdma_context(config) < 0) {
     //     return -1;
     // }
-
-    if (open_rdma_device(config.dev_name, config.ib_port, config.link_type, &rdma_dev) < 0) {
+    INFO("open rdma device {}, link_type {}, hint_gid_index {},", config.dev_name, config.link_type,
+         config.hint_gid_index);
+    if (open_rdma_device(config.dev_name, config.ib_port, config.link_type, config.hint_gid_index,
+                         &rdma_dev) < 0) {
         ERROR("Failed to open RDMA device");
         return -1;
     }
