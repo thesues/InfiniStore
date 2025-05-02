@@ -80,8 +80,8 @@ class Connection {
     struct rdma_device rdma_dev_;
     struct rdma_context ctx_;
 
-    // rdma_conn_info_t local_info_;
-    // rdma_conn_info_t remote_info_;
+    rdma_conn_info_t local_info_;
+    rdma_conn_info_t remote_info_;
 
     std::unordered_map<uintptr_t, struct ibv_mr *> local_mr_;
 

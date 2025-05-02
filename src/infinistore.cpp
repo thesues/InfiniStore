@@ -28,15 +28,17 @@ server_config_t global_config;
 uv_loop_t *loop;
 uv_tcp_t server;
 // global ibv context
-struct ibv_context *ib_ctx;
-struct ibv_pd *pd;
+// struct ibv_context *ib_ctx;
+// struct ibv_pd *pd;
 MM *mm;
 
-int gidx = 0;
-int lid = -1;
-uint8_t ib_port = -1;
-// local active_mtu attr, after exchanging with remote, we will use the min of the two for path.mtu
-ibv_mtu active_mtu;
+// int gidx = 0;
+// int lid = -1;
+// uint8_t ib_port = -1;
+// // local active_mtu attr, after exchanging with remote, we will use the min of the two for
+// path.mtu ibv_mtu active_mtu;
+
+struct rdma_device rdma_dev;
 
 // indicate if the MM extend is in flight
 bool extend_in_flight = false;
@@ -84,13 +86,15 @@ struct Client {
     rdma_conn_info_t remote_info_;
     rdma_conn_info_t local_info_;
 
-    struct ibv_cq *cq_ = NULL;
-    struct ibv_qp *qp_ = NULL;
+    // struct ibv_cq *cq_ = NULL;
+    // struct ibv_qp *qp_ = NULL;
     bool rdma_connected_ = false;
-    struct ibv_comp_channel *comp_channel_ = NULL;
+    // struct ibv_comp_channel *comp_channel_ = NULL;
 
-    // notify thread new request
-    uv_sem_t sem_;
+    rdma_context rdma_ctx_;
+
+    // // notify thread new request
+    // uv_sem_t sem_;
 
     uv_poll_t poll_handle_;
 
@@ -165,27 +169,28 @@ Client::~Client() {
         tcp_recv_buffer_ = NULL;
     }
 
-    if (qp_) {
-        struct ibv_qp_attr attr;
-        memset(&attr, 0, sizeof(attr));
-        attr.qp_state = IBV_QPS_RESET;
-        if (ibv_modify_qp(qp_, &attr, IBV_QP_STATE)) {
-            ERROR("Failed to modify QP to ERR state");
-        }
-    }
-    if (qp_) {
-        ibv_destroy_qp(qp_);
-        qp_ = NULL;
-    }
-    if (cq_) {
-        ibv_destroy_cq(cq_);
-        cq_ = NULL;
-    }
+    destroy_rdma_context(&rdma_ctx_);
+    // if (qp_) {
+    //     struct ibv_qp_attr attr;
+    //     memset(&attr, 0, sizeof(attr));
+    //     attr.qp_state = IBV_QPS_RESET;
+    //     if (ibv_modify_qp(qp_, &attr, IBV_QP_STATE)) {
+    //         ERROR("Failed to modify QP to ERR state");
+    //     }
+    // }
+    // if (qp_) {
+    //     ibv_destroy_qp(qp_);
+    //     qp_ = NULL;
+    // }
+    // if (cq_) {
+    //     ibv_destroy_cq(cq_);
+    //     cq_ = NULL;
+    // }
 
-    if (comp_channel_) {
-        ibv_destroy_comp_channel(comp_channel_);
-        comp_channel_ = NULL;
-    }
+    // if (comp_channel_) {
+    //     ibv_destroy_comp_channel(comp_channel_);
+    //     comp_channel_ = NULL;
+    // }
 }
 
 void on_close(uv_handle_t *handle) {
@@ -337,7 +342,7 @@ void Client::post_ack(int return_code) {
     wr.sg_list = NULL;
     wr.num_sge = 0;
     wr.next = NULL;
-    int ret = ibv_post_send(qp_, &wr, &bad_wr);
+    int ret = ibv_post_send(rdma_ctx_.qp, &wr, &bad_wr);
     if (ret) {
         ERROR("Failed to send WITH_IMM message: {}", strerror(ret));
     }
@@ -352,7 +357,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
     struct ibv_cq *cq;
     void *cq_context;
 
-    if (ibv_get_cq_event(comp_channel_, &cq, &cq_context) != 0) {
+    if (ibv_get_cq_event(rdma_ctx_.comp_channel, &cq, &cq_context) != 0) {
         ERROR("Failed to get CQ event");
         return;
     }
@@ -421,7 +426,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                     struct ibv_sge *sges = item.second;
                     ibv_send_wr *bad_wr = nullptr;
                     DEBUG("IBV POST SEND, wr_id: {}", wrs[0].wr_id);
-                    int ret = ibv_post_send(qp_, &wrs[0], &bad_wr);
+                    int ret = ibv_post_send(rdma_ctx_.qp, &wrs[0], &bad_wr);
                     if (ret) {
                         ERROR("Failed to post RDMA write {}", strerror(ret));
                         throw std::runtime_error("Failed to post RDMA write");
@@ -464,7 +469,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
     }
 }
 
-void add_mempool(uv_work_t *req) { mm->add_mempool(pd); }
+void add_mempool(uv_work_t *req) { mm->add_mempool(rdma_dev.pd); }
 
 void add_mempool_completion(uv_work_t *req, int status) {
     extend_in_flight = false;
@@ -493,7 +498,7 @@ int Client::prepare_recv_rdma_request(int buf_idx) {
     rwr.next = NULL;
     rwr.sg_list = &sge;
     rwr.num_sge = 1;
-    if (ibv_post_recv(qp_, &rwr, &bad_wr)) {
+    if (ibv_post_recv(rdma_ctx_.qp, &rwr, &bad_wr)) {
         ERROR("Failed to post receive, {}");
         return -1;
     }
@@ -553,7 +558,7 @@ void Client::perform_batch_rdma(const RemoteMetaRequest *remote_meta_req,
         if (num_wr == max_wr || i == remote_meta_req->keys()->size() - 1) {
             if (!wr_full) {
                 struct ibv_send_wr *bad_wr = nullptr;
-                int ret = ibv_post_send(qp_, &wrs[0], &bad_wr);
+                int ret = ibv_post_send(rdma_ctx_.qp, &wrs[0], &bad_wr);
                 if (ret) {
                     ERROR("Failed to post RDMA write {}", strerror(ret));
                     return;
@@ -699,6 +704,7 @@ void on_write(uv_write_t *req, int status) {
     free(req);
 }
 
+/*
 int init_rdma_context(server_config_t config) {
     struct ibv_device **dev_list;
     struct ibv_device *ib_dev;
@@ -764,6 +770,7 @@ int init_rdma_context(server_config_t config) {
 
     return 0;
 }
+*/
 
 int Client::rdma_exchange() {
     INFO("do rdma exchange...");
@@ -775,128 +782,150 @@ int Client::rdma_exchange() {
         return SYSTEM_ERROR;
     }
 
-    comp_channel_ = ibv_create_comp_channel(ib_ctx);
-    if (!comp_channel_) {
-        ERROR("Failed to create completion channel");
-        return -1;
-    }
+    // create rdma context per connection.
+    // use the global rdma_dev
+    init_rdma_context(&rdma_ctx_, &rdma_dev);
 
-    // RDMA setup if not already done
-    assert(comp_channel_ != NULL);
+    local_info_ = get_rdma_conn_info(&rdma_ctx_, &rdma_dev);
 
-    cq_ = ibv_create_cq(ib_ctx, MAX_SEND_WR + MAX_RECV_WR, NULL, comp_channel_, 0);
-    if (!cq_) {
-        ERROR("Failed to create CQ");
-        return SYSTEM_ERROR;
-    }
-
-    // Create Queue Pair
-    struct ibv_qp_init_attr qp_init_attr = {};
-    qp_init_attr.send_cq = cq_;
-    qp_init_attr.recv_cq = cq_;
-    qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
-    qp_init_attr.cap.max_send_wr = MAX_SEND_WR;
-    qp_init_attr.cap.max_recv_wr = MAX_RECV_WR;
-    qp_init_attr.cap.max_send_sge = 1;
-    qp_init_attr.cap.max_recv_sge = 1;
-
-    qp_ = ibv_create_qp(pd, &qp_init_attr);
-    if (!qp_) {
-        ERROR("Failed to create QP");
-        return SYSTEM_ERROR;
-    }
-    // Modify QP to INIT state
-    struct ibv_qp_attr attr = {};
-    attr.qp_state = IBV_QPS_INIT;
-    attr.port_num = ib_port;
-    attr.pkey_index = 0;
-    attr.qp_access_flags =
-        IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE;
-
-    int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
-
-    ret = ibv_modify_qp(qp_, &attr, flags);
-    if (ret) {
-        ERROR("Failed to modify QP to INIT");
-        return SYSTEM_ERROR;
-    }
-
-    union ibv_gid gid;
-    // get gid
-    if (gidx != -1 && ibv_query_gid(ib_ctx, 1, gidx, &gid)) {
-        ERROR("Failed to get GID");
-        return SYSTEM_ERROR;
-    }
-
-    local_info_.qpn = qp_->qp_num;
-    local_info_.psn = lrand48() & 0xffffff;
-    local_info_.gid = gid;
-    local_info_.lid = lid;
-    local_info_.mtu = (uint32_t)active_mtu;
-
-    INFO("gid index: {}", gidx);
     print_rdma_conn_info(&local_info_, false);
     print_rdma_conn_info(&remote_info_, true);
 
-    // update MTU
-    if (remote_info_.mtu != (uint32_t)active_mtu) {
-        WARN("remote MTU: {}, local MTU: {} is not the same, update to minimal MTU",
-             1 << ((uint32_t)remote_info_.mtu + 7), 1 << ((uint32_t)active_mtu + 7));
-    }
-
     // Modify QP to RTR state
-    memset(&attr, 0, sizeof(attr));
-    attr.qp_state = IBV_QPS_RTR;
-    attr.path_mtu = (enum ibv_mtu)std::min((uint32_t)active_mtu, (uint32_t)remote_info_.mtu);
-    attr.dest_qp_num = remote_info_.qpn;
-    attr.rq_psn = remote_info_.psn;
-    attr.max_dest_rd_atomic = 16;
-    attr.min_rnr_timer = 12;
-    attr.ah_attr.dlid = 0;  // RoCE v2 is used.
-    attr.ah_attr.sl = 0;
-    attr.ah_attr.src_path_bits = 0;
-    attr.ah_attr.port_num = ib_port;
-
-    if (gidx == -1) {
-        // IB
-        attr.ah_attr.dlid = remote_info_.lid;
-        attr.ah_attr.is_global = 0;
-    }
-    else {
-        // RoCE v2
-        attr.ah_attr.is_global = 1;
-        attr.ah_attr.grh.dgid = remote_info_.gid;
-        attr.ah_attr.grh.sgid_index = gidx;
-        attr.ah_attr.grh.hop_limit = 1;
+    if (modify_qp_to_rtr(&rdma_ctx_, &rdma_dev, &remote_info_)) {
+        ERROR("Failed to modify QP to RTR");
+        return -1;
     }
 
-    flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
-            IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
-
-    ret = ibv_modify_qp(qp_, &attr, flags);
-    if (ret) {
-        ERROR("Failed to modify QP to RTR: reason: {}", strerror(ret));
-        return SYSTEM_ERROR;
-    }
-
-    // Modify QP to RTS state
-    memset(&attr, 0, sizeof(attr));
-    attr.qp_state = IBV_QPS_RTS;
-    attr.timeout = 14;
-    attr.retry_cnt = 7;
-    attr.rnr_retry = 7;
-    attr.sq_psn = local_info_.psn;
-    attr.max_rd_atomic = 16;
-
-    flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN |
-            IBV_QP_MAX_QP_RD_ATOMIC;
-
-    ret = ibv_modify_qp(qp_, &attr, flags);
-    if (ret) {
+    if (modify_qp_to_rts(&rdma_ctx_)) {
         ERROR("Failed to modify QP to RTS");
-        return SYSTEM_ERROR;
+        return -1;
     }
+
+    // comp_channel_ = ibv_create_comp_channel(ib_ctx);
+    // if (!comp_channel_) {
+    //     ERROR("Failed to create completion channel");
+    //     return -1;
+    // }
+
+    // // RDMA setup if not already done
+    // assert(comp_channel_ != NULL);
+
+    // cq_ = ibv_create_cq(ib_ctx, MAX_SEND_WR + MAX_RECV_WR, NULL, comp_channel_, 0);
+    // if (!cq_) {
+    //     ERROR("Failed to create CQ");
+    //     return SYSTEM_ERROR;
+    // }
+
+    // // Create Queue Pair
+    // struct ibv_qp_init_attr qp_init_attr = {};
+    // qp_init_attr.send_cq = cq_;
+    // qp_init_attr.recv_cq = cq_;
+    // qp_init_attr.qp_type = IBV_QPT_RC;  // Reliable Connection
+    // qp_init_attr.cap.max_send_wr = MAX_SEND_WR;
+    // qp_init_attr.cap.max_recv_wr = MAX_RECV_WR;
+    // qp_init_attr.cap.max_send_sge = 1;
+    // qp_init_attr.cap.max_recv_sge = 1;
+
+    // qp_ = ibv_create_qp(pd, &qp_init_attr);
+    // if (!qp_) {
+    //     ERROR("Failed to create QP");
+    //     return SYSTEM_ERROR;
+    // }
+    // // Modify QP to INIT state
+    // struct ibv_qp_attr attr = {};
+    // attr.qp_state = IBV_QPS_INIT;
+    // attr.port_num = ib_port;
+    // attr.pkey_index = 0;
+    // attr.qp_access_flags =
+    //     IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ | IBV_ACCESS_LOCAL_WRITE;
+
+    // int flags = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT | IBV_QP_ACCESS_FLAGS;
+
+    // ret = ibv_modify_qp(qp_, &attr, flags);
+    // if (ret) {
+    //     ERROR("Failed to modify QP to INIT");
+    //     return SYSTEM_ERROR;
+    // }
+
+    // union ibv_gid gid;
+    // // get gid
+    // if (gidx != -1 && ibv_query_gid(ib_ctx, 1, gidx, &gid)) {
+    //     ERROR("Failed to get GID");
+    //     return SYSTEM_ERROR;
+    // }
+
+    // local_info_.qpn = qp_->qp_num;
+    // local_info_.psn = lrand48() & 0xffffff;
+    // local_info_.gid = gid;
+    // local_info_.lid = lid;
+    // local_info_.mtu = (uint32_t)active_mtu;
+
+    // INFO("gid index: {}", gidx);
+    // print_rdma_conn_info(&local_info_, false);
+    // print_rdma_conn_info(&remote_info_, true);
+
+    // // update MTU
+    // if (remote_info_.mtu != (uint32_t)active_mtu) {
+    //     WARN("remote MTU: {}, local MTU: {} is not the same, update to minimal MTU",
+    //          1 << ((uint32_t)remote_info_.mtu + 7), 1 << ((uint32_t)active_mtu + 7));
+    // }
+
+    // // Modify QP to RTR state
+    // memset(&attr, 0, sizeof(attr));
+    // attr.qp_state = IBV_QPS_RTR;
+    // attr.path_mtu = (enum ibv_mtu)std::min((uint32_t)active_mtu, (uint32_t)remote_info_.mtu);
+    // attr.dest_qp_num = remote_info_.qpn;
+    // attr.rq_psn = remote_info_.psn;
+    // attr.max_dest_rd_atomic = 16;
+    // attr.min_rnr_timer = 12;
+    // attr.ah_attr.dlid = 0;  // RoCE v2 is used.
+    // attr.ah_attr.sl = 0;
+    // attr.ah_attr.src_path_bits = 0;
+    // attr.ah_attr.port_num = ib_port;
+
+    // if (gidx == -1) {
+    //     // IB
+    //     attr.ah_attr.dlid = remote_info_.lid;
+    //     attr.ah_attr.is_global = 0;
+    // }
+    // else {
+    //     // RoCE v2
+    //     attr.ah_attr.is_global = 1;
+    //     attr.ah_attr.grh.dgid = remote_info_.gid;
+    //     attr.ah_attr.grh.sgid_index = gidx;
+    //     attr.ah_attr.grh.hop_limit = 1;
+    // }
+
+    // flags = IBV_QP_STATE | IBV_QP_AV | IBV_QP_PATH_MTU | IBV_QP_DEST_QPN | IBV_QP_RQ_PSN |
+    //         IBV_QP_MAX_DEST_RD_ATOMIC | IBV_QP_MIN_RNR_TIMER;
+
+    // ret = ibv_modify_qp(qp_, &attr, flags);
+    // if (ret) {
+    //     ERROR("Failed to modify QP to RTR: reason: {}", strerror(ret));
+    //     return SYSTEM_ERROR;
+    // }
+
+    // // Modify QP to RTS state
+    // memset(&attr, 0, sizeof(attr));
+    // attr.qp_state = IBV_QPS_RTS;
+    // attr.timeout = 14;
+    // attr.retry_cnt = 7;
+    // attr.rnr_retry = 7;
+    // attr.sq_psn = local_info_.psn;
+    // attr.max_rd_atomic = 16;
+
+    // flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY | IBV_QP_SQ_PSN |
+    //         IBV_QP_MAX_QP_RD_ATOMIC;
+
+    // ret = ibv_modify_qp(qp_, &attr, flags);
+    // if (ret) {
+    //     ERROR("Failed to modify QP to RTS");
+    //     return SYSTEM_ERROR;
+    // }
+
     INFO("RDMA exchange done");
+
     rdma_connected_ = true;
 
     if (posix_memalign((void **)&send_buffer_, 4096, PROTOCOL_BUFFER_SIZE) != 0) {
@@ -904,7 +933,7 @@ int Client::rdma_exchange() {
         return SYSTEM_ERROR;
     }
 
-    send_mr_ = ibv_reg_mr(pd, send_buffer_, PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
+    send_mr_ = ibv_reg_mr(rdma_dev.pd, send_buffer_, PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
     if (!send_mr_) {
         ERROR("Failed to register MR");
         return SYSTEM_ERROR;
@@ -916,7 +945,8 @@ int Client::rdma_exchange() {
             return SYSTEM_ERROR;
         }
 
-        recv_mr_[i] = ibv_reg_mr(pd, recv_buffer_[i], PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
+        recv_mr_[i] =
+            ibv_reg_mr(rdma_dev.pd, recv_buffer_[i], PROTOCOL_BUFFER_SIZE, IBV_ACCESS_LOCAL_WRITE);
         if (!recv_mr_[i]) {
             ERROR("Failed to register MR");
             return SYSTEM_ERROR;
@@ -928,12 +958,12 @@ int Client::rdma_exchange() {
         }
     }
 
-    if (ibv_req_notify_cq(cq_, 0)) {
+    if (ibv_req_notify_cq(rdma_ctx_.cq, 0)) {
         ERROR("Failed to request notify for CQ");
         return SYSTEM_ERROR;
     }
 
-    uv_poll_init(loop, &poll_handle_, comp_channel_->fd);
+    uv_poll_init(loop, &poll_handle_, rdma_ctx_.comp_channel->fd);
     poll_handle_.data = this;
     uv_poll_start(&poll_handle_, UV_READABLE | UV_WRITABLE,
                   [](uv_poll_t *handle, int status, int events) {
@@ -1209,10 +1239,15 @@ int register_server(unsigned long loop_ptr, server_config_t config) {
         return -1;
     }
 
-    if (init_rdma_context(config) < 0) {
+    // if (init_rdma_context(config) < 0) {
+    //     return -1;
+    // }
+
+    if (open_rdma_device(config.dev_name, config.ib_port, config.link_type, &rdma_dev) < 0) {
+        ERROR("Failed to open RDMA device");
         return -1;
     }
-    mm = new MM(config.prealloc_size << 30, config.minimal_allocate_size << 10, pd);
+    mm = new MM(config.prealloc_size << 30, config.minimal_allocate_size << 10, rdma_dev.pd);
 
     INFO("register server done");
 

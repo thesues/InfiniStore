@@ -393,11 +393,11 @@ int Connection::setup_rdma(client_config_t config) {
         return -1;
     }
 
-    print_rdma_conn_info(&ctx_.remote_info, true);
-    print_rdma_conn_info(&ctx_.local_info, false);
+    print_rdma_conn_info(&remote_info_, true);
+    print_rdma_conn_info(&local_info_, false);
 
     // Modify QP to RTR state
-    if (modify_qp_to_rtr(&ctx_, &rdma_dev_)) {
+    if (modify_qp_to_rtr(&ctx_, &rdma_dev_, &remote_info_)) {
         ERROR("Failed to modify QP to RTR");
         return -1;
     }
@@ -525,9 +525,11 @@ int Connection::exchange_conn_info() {
     struct iovec iov[2];
     struct msghdr msg;
 
+    local_info_ = get_rdma_conn_info(&ctx_, &rdma_dev_);
+
     iov[0].iov_base = &header;
     iov[0].iov_len = FIXED_HEADER_SIZE;
-    iov[1].iov_base = &ctx_.local_info;
+    iov[1].iov_base = &local_info_;
     iov[1].iov_len = sizeof(rdma_conn_info_t);
 
     memset(&msg, 0, sizeof(msg));
@@ -550,7 +552,7 @@ int Connection::exchange_conn_info() {
         return -1;
     }
 
-    if (recv(sock_, &ctx_.remote_info, sizeof(rdma_conn_info_t), MSG_WAITALL) !=
+    if (recv(sock_, &remote_info_, sizeof(rdma_conn_info_t), MSG_WAITALL) !=
         sizeof(rdma_conn_info_t)) {
         ERROR("Failed to receive remote connection information");
         return -1;

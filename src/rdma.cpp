@@ -162,15 +162,29 @@ int init_rdma_context(struct rdma_context *ctx, struct rdma_device *rdma_dev) {
     }
 
     // save information to local_info for exchange data
-    ctx->local_info.qpn = ctx->qp->qp_num;
-    ctx->local_info.psn = lrand48() & 0xffffff;
-    if (rdma_dev->gid_index != -1) {
-        ctx->local_info.gid = rdma_dev->gid;
-    }
+    // ctx->local_info.qpn = ctx->qp->qp_num;
+    // ctx->local_info.psn = lrand48() & 0xffffff;
+    // if (rdma_dev->gid_index != -1) {
+    //     ctx->local_info.gid = rdma_dev->gid;
+    // }
 
-    ctx->local_info.lid = rdma_dev->lid;
-    ctx->local_info.mtu = (uint32_t)rdma_dev->active_mtu;
+    // ctx->local_info.lid = rdma_dev->lid;
+    // ctx->local_info.mtu = (uint32_t)rdma_dev->active_mtu;
+    ctx->psn = lrand48() & 0xffffff;
+
     return 0;
+}
+
+rdma_conn_info_t get_rdma_conn_info(struct rdma_context *ctx, struct rdma_device *rdma_dev) {
+    assert(ctx != NULL);
+    rdma_conn_info_t conn_info = {
+        .qpn = ctx->qp->qp_num,
+        .psn = ctx->psn,
+        .gid = rdma_dev->gid,
+        .lid = rdma_dev->lid,
+        .mtu = (uint32_t)rdma_dev->active_mtu,
+    };
+    return conn_info;
 }
 
 int modify_qp_to_init(struct rdma_context *ctx, struct rdma_device *rdma_dev) {
@@ -202,7 +216,7 @@ int modify_qp_to_rts(struct rdma_context *ctx) {
     attr.timeout = 14;
     attr.retry_cnt = 7;
     attr.rnr_retry = 7;
-    attr.sq_psn = ctx->local_info.psn;  // Use 0 or match with local PSN
+    attr.sq_psn = ctx->psn;  // Use 0 or match with local PSN
     attr.max_rd_atomic = 16;
 
     int flags = IBV_QP_STATE | IBV_QP_TIMEOUT | IBV_QP_RETRY_CNT | IBV_QP_RNR_RETRY |
@@ -216,7 +230,8 @@ int modify_qp_to_rts(struct rdma_context *ctx) {
     return 0;
 }
 
-int modify_qp_to_rtr(struct rdma_context *ctx, struct rdma_device *rdma_dev) {
+int modify_qp_to_rtr(struct rdma_context *ctx, struct rdma_device *rdma_dev,
+                     rdma_conn_info_t *remote_info) {
     assert(ctx != NULL);
     assert(rdma_dev != NULL);
 
@@ -224,16 +239,16 @@ int modify_qp_to_rtr(struct rdma_context *ctx, struct rdma_device *rdma_dev) {
     attr.qp_state = IBV_QPS_RTR;
 
     // update MTU
-    if (ctx->remote_info.mtu != (uint32_t)rdma_dev->active_mtu) {
+    if (remote_info->mtu != (uint32_t)rdma_dev->active_mtu) {
         INFO("remote MTU: {}, local MTU: {} is not the same, update to minimal MTU",
-             1 << ((uint32_t)ctx->remote_info.mtu + 7), 1 << ((uint32_t)rdma_dev->active_mtu + 7));
+             1 << ((uint32_t)remote_info->mtu + 7), 1 << ((uint32_t)rdma_dev->active_mtu + 7));
     }
 
     attr.path_mtu =
-        (enum ibv_mtu)std::min((uint32_t)rdma_dev->active_mtu, (uint32_t)ctx->remote_info.mtu);
+        (enum ibv_mtu)std::min((uint32_t)rdma_dev->active_mtu, (uint32_t)remote_info->mtu);
 
-    attr.dest_qp_num = ctx->remote_info.qpn;
-    attr.rq_psn = ctx->remote_info.psn;
+    attr.dest_qp_num = remote_info->qpn;
+    attr.rq_psn = remote_info->psn;
     attr.max_dest_rd_atomic = 16;
     attr.min_rnr_timer = 12;
     attr.ah_attr.dlid = 0;
@@ -243,13 +258,13 @@ int modify_qp_to_rtr(struct rdma_context *ctx, struct rdma_device *rdma_dev) {
 
     if (rdma_dev->gid_index == -1) {
         // IB
-        attr.ah_attr.dlid = ctx->remote_info.lid;
+        attr.ah_attr.dlid = remote_info->lid;
         attr.ah_attr.is_global = 0;
     }
     else {
         // RoCE v2
         attr.ah_attr.is_global = 1;
-        attr.ah_attr.grh.dgid = ctx->remote_info.gid;
+        attr.ah_attr.grh.dgid = remote_info->gid;
         attr.ah_attr.grh.sgid_index = rdma_dev->gid_index;  // local gid
         attr.ah_attr.grh.hop_limit = 1;
     }
