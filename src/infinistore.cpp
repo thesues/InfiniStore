@@ -21,6 +21,7 @@
 
 #include "ibv_helper.h"
 #include "protocol.h"
+#include "rdma.h"
 
 server_config_t global_config;
 
