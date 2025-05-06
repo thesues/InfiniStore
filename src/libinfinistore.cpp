@@ -441,10 +441,11 @@ int Connection::init_connection(client_config_t config) {
 
     // always connect to localhost
     if (inet_pton(AF_INET, config.host_addr.data(), &serv_addr.sin_addr) <= 0) {
-        ERROR("Invalid address/ Address not supported");
+        ERROR("Invalid address/ Address not supported {}", config.host_addr);
         return -1;
     }
 
+    INFO("Connecting to {}:{}", config.host_addr, config.service_port);
     if (connect(sock_, (struct sockaddr *)&serv_addr, sizeof(serv_addr)) < 0) {
         ERROR("Failed to connect to server");
         return -1;

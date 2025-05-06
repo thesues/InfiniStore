@@ -17,7 +17,6 @@ config = infinistore.ClientConfig(
     ib_port=1,
     link_type=infinistore.LINK_ETHERNET,
     dev_name="mlx5_0",
-    hint_gid_index=6,
 )
 
 

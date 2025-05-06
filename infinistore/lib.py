@@ -7,6 +7,7 @@ import subprocess
 import asyncio
 from functools import singledispatchmethod
 from typing import Optional, Union, List, Tuple
+import socket
 
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -322,6 +323,7 @@ class InfinityConnection:
         loop = asyncio.get_running_loop()
 
         def blocking_connect():
+            self.config.host_addr = self.resolve_hostname(self.config.host_addr)
             if self.conn.init_connection(self.config) < 0:
                 raise Exception("Failed to initialize remote connection")
             if self.config.connection_type == TYPE_RDMA:
@@ -330,6 +332,25 @@ class InfinityConnection:
                 self.rdma_connected = True
 
         await loop.run_in_executor(None, blocking_connect)
+
+    @staticmethod
+    def resolve_hostname(hostname: str) -> str:
+        try:
+            socket.inet_aton(hostname)
+            return hostname
+        except socket.error:
+            pass
+
+        # If the hostname is not an IP address, resolve it
+        Logger.info(f"Resolving hostname: {hostname}")
+        try:
+            infos = socket.getaddrinfo(
+                hostname, None, socket.AF_INET, socket.SOCK_STREAM
+            )
+            # Return the first resolved IPv4 address
+            return infos[0][4][0]
+        except socket.gaierror as e:
+            raise Exception(f"Failed to resolve hostname '{hostname}': {e}")
 
     def connect(self):
         """
@@ -343,7 +364,9 @@ class InfinityConnection:
         if self.rdma_connected:
             raise Exception("Already connected to remote instance")
 
-        print(f"connecting to {self.config.host_addr}")
+        self.config.host_addr = self.resolve_hostname(self.config.host_addr)
+
+        # check if the hostname is valid
         ret = self.conn.init_connection(self.config)
         if ret < 0:
             raise Exception("Failed to initialize remote connection")
