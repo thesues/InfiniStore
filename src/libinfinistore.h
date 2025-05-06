@@ -64,19 +64,6 @@ class Connection {
     // tcp socket
     int sock_ = 0;
 
-    // rdma connections
-    // struct ibv_context *ib_ctx_ = NULL;
-    // struct ibv_pd *pd_ = NULL;
-    // struct ibv_cq *cq_ = NULL;
-    // struct ibv_qp *qp_ = NULL;
-    // int gidx_ = -1;
-    // int lid_ = -1;
-    // uint8_t ib_port_ = -1;
-
-    // // local active_mtu attr, after exchanging with remote, we will use the min of the two for
-    // // path.mtu
-    // ibv_mtu active_mtu_;
-
     struct rdma_device rdma_dev_;
     struct rdma_context ctx_;
 
@@ -118,11 +105,7 @@ class Connection {
     int delete_keys(const std::vector<std::string> &keys);
     int register_mr(void *base_ptr, size_t ptr_region_size);
 
-    // int modify_qp_to_init();
-    // int modify_qp_to_rts();
-    // int modify_qp_to_rtr();
     int exchange_conn_info();
-    // int init_rdma_resources(client_config_t config);
 
     void post_recv_ack(rdma_info_base *info);
 
