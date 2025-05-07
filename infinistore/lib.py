@@ -389,7 +389,7 @@ class InfinityConnection:
 
         Parameters:
         key (str): The key associated with the cached item.
-        **kwargs: Additional keyword arguments.
+        ``**kwargs``: Additional keyword arguments.
 
         Returns:
         np.ndarray: The cached item retrieved from the TCP connection.
@@ -425,6 +425,31 @@ class InfinityConnection:
     async def rdma_write_cache_async(
         self, blocks: List[Tuple[str, int]], block_size: int, ptr: int
     ):
+        """
+        Asynchronously writes data to the infinistore cache using RDMA.
+
+        This function performs an RDMA write operation to the infinistore cache.
+        It requires an active RDMA connection and uses a semaphore to limit
+        concurrent writes. The operation is completed asynchronously.
+
+        Args:
+            blocks (List[Tuple[str, int]]): A list of tuples where each tuple
+                contains a key (str) and an offset (int) representing the data
+                blocks to be written.
+            block_size (int): The size of each block to be written, in bytes.
+            ptr (int): A pointer to the memory location containing the data to
+                be written.
+
+        Raises:
+            Exception: If RDMA is not connected or if the write operation fails.
+        Returns:
+            int: The result code of the write operation if successful.
+
+        Notes:
+            - If the RDMA connection is not established, an exception is raised.
+            - The semaphore ensures that the number of concurrent writes is
+              limited.
+        """
         if not self.rdma_connected:
             raise Exception("this function is only valid for connected rdma")
 
@@ -458,6 +483,30 @@ class InfinityConnection:
     async def rdma_read_cache_async(
         self, blocks: List[Tuple[str, int]], block_size: int, ptr: int
     ):
+        """
+        Asynchronously reads data from the RDMA cache.
+
+        This function performs an asynchronous RDMA read operation for the specified
+        blocks of data. It requires an active RDMA connection and uses a semaphore
+        to limit concurrent operations.
+
+        Args:
+            blocks (List[Tuple[str, int]]): A list of tuples where each tuple contains
+                a key (str) and an offset (int) specifying the data to be read.
+            block_size (int): The size of each block to be read.
+            ptr (int): A pointer to the memory location where the data will be stored.
+
+        Raises:
+            Exception: If RDMA is not connected or if the RDMA read operation fails.
+            InfiniStoreKeyNotFound: If some keys are not found in the RDMA cache.
+
+        Returns:
+            int: The result code of the RDMA read operation (e.g., 200 for success).
+
+        Note:
+            This function uses a callback mechanism to handle the result of the RDMA
+            read operation. The semaphore is released after the operation completes.
+        """
         if not self.rdma_connected:
             raise Exception("this function is only valid for connected rdma")
         pass
