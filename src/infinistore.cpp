@@ -27,16 +27,8 @@ server_config_t global_config;
 
 uv_loop_t *loop;
 uv_tcp_t server;
-// global ibv context
-// struct ibv_context *ib_ctx;
-// struct ibv_pd *pd;
-MM *mm;
 
-// int gidx = 0;
-// int lid = -1;
-// uint8_t ib_port = -1;
-// // local active_mtu attr, after exchanging with remote, we will use the min of the two for
-// path.mtu ibv_mtu active_mtu;
+MM *mm;
 
 struct rdma_device rdma_dev;
 
@@ -86,15 +78,9 @@ struct Client {
     rdma_conn_info_t remote_info_;
     rdma_conn_info_t local_info_;
 
-    // struct ibv_cq *cq_ = NULL;
-    // struct ibv_qp *qp_ = NULL;
     bool rdma_connected_ = false;
-    // struct ibv_comp_channel *comp_channel_ = NULL;
 
     rdma_context rdma_ctx_;
-
-    // // notify thread new request
-    // uv_sem_t sem_;
 
     uv_poll_t poll_handle_;
 
@@ -170,27 +156,6 @@ Client::~Client() {
     }
 
     destroy_rdma_context(&rdma_ctx_);
-    // if (qp_) {
-    //     struct ibv_qp_attr attr;
-    //     memset(&attr, 0, sizeof(attr));
-    //     attr.qp_state = IBV_QPS_RESET;
-    //     if (ibv_modify_qp(qp_, &attr, IBV_QP_STATE)) {
-    //         ERROR("Failed to modify QP to ERR state");
-    //     }
-    // }
-    // if (qp_) {
-    //     ibv_destroy_qp(qp_);
-    //     qp_ = NULL;
-    // }
-    // if (cq_) {
-    //     ibv_destroy_cq(cq_);
-    //     cq_ = NULL;
-    // }
-
-    // if (comp_channel_) {
-    //     ibv_destroy_comp_channel(comp_channel_);
-    //     comp_channel_ = NULL;
-    // }
 }
 
 void on_close(uv_handle_t *handle) {
