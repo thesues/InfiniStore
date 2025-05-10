@@ -67,8 +67,6 @@ setup(
         "pybind11",
         "uvicorn",
         "numpy",
-        "meson",
-        "ninja",
     ],
     description="A kvcache memory pool",
     long_description=open("README.md").read(),

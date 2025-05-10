@@ -6,4 +6,5 @@ table RemoteMetaRequest {
   remote_addrs: [ulong];       // GPU addresses
   op: byte;
 }
+
 root_type RemoteMetaRequest;

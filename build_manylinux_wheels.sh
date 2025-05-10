@@ -12,6 +12,7 @@ OLDPATH=$PATH
 for PYTHON in "${PYTHON_VERSIONS[@]}"; do
     BINDIR="$(dirname $PYTHON)"
     export PATH="$BINDIR:$OLDPATH"
+    pip install meson ninja
     ${PYTHON} setup.py bdist_wheel
     #runtime will install ibverbs, so exclude it
     WHEEL_FILE=$(ls dist/*.whl)
