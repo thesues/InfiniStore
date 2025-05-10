@@ -44,15 +44,6 @@ RUN rm -rf /tmp/flatbuffers
 # Install boost
 RUN dnf install -y boost boost-devel
 
-# Install pybind11 for different versions of built-in python3 by almalinux
-RUN /opt/python/cp310-cp310/bin/pip3 install pybind11
-RUN /opt/python/cp311-cp311/bin/pip3 install pybind11
-
-# In almalinux, setuptools for python3.12 is not installed
-# so install it
-RUN /opt/python/cp312-cp312/bin/pip3 install setuptools
-RUN /opt/python/cp312-cp312/bin/pip3 install pybind11
-
 # The above get the build environment ready!
 WORKDIR /app
 RUN git config --global --add safe.directory /app

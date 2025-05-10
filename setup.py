@@ -64,7 +64,6 @@ setup(
     install_requires=[
         "uvloop",
         "fastapi",
-        "pybind11",
         "uvicorn",
         "numpy",
     ],
