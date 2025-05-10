@@ -1,20 +1,15 @@
 PYTHON_VERSIONS=(
-  "/opt/python/cp310-cp310/bin/python3.10"
-  "/opt/python/cp311-cp311/bin/python3.11"
-  "/opt/python/cp312-cp312/bin/python3.12"
+ "/opt/python/cp310-cp310/bin/python3.10"
+ "/opt/python/cp311-cp311/bin/python3.11"
+ "/opt/python/cp312-cp312/bin/python3.12"
 )
-rm -rf build/ dist/ wheelhouse/
+
+rm -rf dist/ wheelhouse/
+OLDPATH=$PATH
 for PYTHON in "${PYTHON_VERSIONS[@]}"; do
-    make -C src clean
-    rm -rf infinistore/*.so
-    make -C src manylinux PYTHON=${PYTHON} -j8
-    if [ $? -ne 0 ]; then
-        exit 1
-    fi
-    unset LD_LIBRARY_PATH
-    export LD_LIBRARY_PATH=/usr/local/lib
-    #ldd check, auditwheel will also check LD_LIBRARY_PATH
-    ldd src/*.so
+    rm -rf build/
+    BINDIR="$(dirname $PYTHON)"
+    export PATH="$BINDIR:$OLDPATH"
     ${PYTHON} setup.py bdist_wheel
     #runtime will install ibverbs, so exclude it
     WHEEL_FILE=$(ls dist/*.whl)
