@@ -4,10 +4,12 @@ PYTHON_VERSIONS=(
  "/opt/python/cp312-cp312/bin/python3.12"
 )
 
+#clean up inplace build
+rm infinistore/*.so
+
 rm -rf dist/ wheelhouse/
 OLDPATH=$PATH
 for PYTHON in "${PYTHON_VERSIONS[@]}"; do
-    rm -rf build/
     BINDIR="$(dirname $PYTHON)"
     export PATH="$BINDIR:$OLDPATH"
     ${PYTHON} setup.py bdist_wheel
