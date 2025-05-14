@@ -33,7 +33,7 @@ Most users just need to deploy and run InfiniStore, and they don't need to under
 pip install infinistore
 ```
 
-## Install from Source Code for develop
+## Development Installation
 
 For users who need to understand how InfiniStore code works or make code contributions to InfiniStore, it's recommended to install from source code:
 

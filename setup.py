@@ -50,7 +50,7 @@ class CustomBuildExt(build_ext):
                 shutil.copy(so_file, build_dest)
 
 
-cpp_extension = Extension(name="infinistore._infinistore", sources=[""])
+cpp_extension = Extension(name="infinistore._infinistore", sources=[])
 ext_modules = [cpp_extension]
 
 setup(

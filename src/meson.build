@@ -29,7 +29,6 @@ generated_headers = []
 foreach fb_source : fb_sources
   fb_name = fb_source.split('.')[0]
   header_name = fb_name + '_generated.h'
-   # 输出到 build/generated 目录
   generated_headers += custom_target(
     fb_name + '_gen',
     input: fb_source,
