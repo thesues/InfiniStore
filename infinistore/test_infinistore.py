@@ -153,7 +153,7 @@ def test_batch_read_write_cache(server, separated_gpu):
         host_addr="127.0.0.1",
         service_port=92345,
         link_type=infinistore.LINK_ETHERNET,
-        dev_name="RDMA_DEV[0]",
+        dev_name=f"{RDMA_DEV[0]}",
     )
 
     config.connection_type = infinistore.TYPE_RDMA
@@ -273,7 +273,7 @@ def test_key_check(server):
         host_addr="127.0.0.1",
         service_port=92345,
         link_type=infinistore.LINK_ETHERNET,
-        dev_name="RDMA_DEV[0]",
+        dev_name=f"{RDMA_DEV[0]}",
         connection_type=infinistore.TYPE_RDMA,
     )
     conn = infinistore.InfinityConnection(config)
@@ -293,7 +293,7 @@ def test_get_match_last_index(server):
         host_addr="127.0.0.1",
         service_port=92345,
         link_type=infinistore.LINK_ETHERNET,
-        dev_name="RDMA_DEV[0]",
+        dev_name=f"{RDMA_DEV[0]}",
         connection_type=infinistore.TYPE_RDMA,
     )
     conn = infinistore.InfinityConnection(config)

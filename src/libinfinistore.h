@@ -70,7 +70,16 @@ class Connection {
     rdma_conn_info_t local_info_;
     rdma_conn_info_t remote_info_;
 
-    std::unordered_map<uintptr_t, struct ibv_mr *> local_mr_;
+    // binary tree
+
+    struct cmp {
+        bool operator()(const std::pair<uintptr_t, size_t> &a,
+                        const std::pair<uintptr_t, size_t> &b) const {
+            return a.first < b.first;
+        }
+    };
+    // sort by uintptr_t
+    std::map<std::pair<uintptr_t, size_t>, struct ibv_mr *, cmp> local_mr_;
 
     /*
     This is MAX_RECV_WR not MAX_SEND_WR,
@@ -116,6 +125,10 @@ class Connection {
 
     SendBuffer *get_recv_buffer();
     void release_recv_buffer(SendBuffer *buffer);
+
+   private:
+    bool mr_overlap(void *base_ptr, size_t ptr_region_size);
+    struct ibv_mr *mr_contains(void *base_ptr, size_t ptr_region_size);
 };
 
 #endif  // LIBINFINISTORE_H

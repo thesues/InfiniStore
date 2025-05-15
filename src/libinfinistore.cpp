@@ -469,7 +469,7 @@ int Connection::delete_keys(const std::vector<std::string> &keys) {
 }
 
 void Connection::post_recv_ack(rdma_info_base *info) {
-    struct ibv_recv_wr recv_wr = {0};
+    struct ibv_recv_wr recv_wr {};
     struct ibv_recv_wr *bad_recv_wr = NULL;
 
     recv_wr.wr_id = (uintptr_t)info;
@@ -599,12 +599,14 @@ int Connection::w_rdma_async(const std::vector<std::string> &keys,
     assert(base_ptr != NULL);
     assert(offsets.size() == keys.size());
 
-    if (!local_mr_.count((uintptr_t)base_ptr)) {
+    // search mr from base_ptr
+
+    // assume all blocks are in the same mr
+    struct ibv_mr *mr = mr_contains(base_ptr, 0);
+    if (mr == NULL) {
         ERROR("Please register memory first {}", (uint64_t)base_ptr);
         return -1;
     }
-
-    struct ibv_mr *mr = local_mr_[(uintptr_t)base_ptr];
 
     // remote_meta_request req = {
     //     .keys = keys,
@@ -634,8 +636,8 @@ int Connection::w_rdma_async(const std::vector<std::string> &keys,
     post_recv_ack(info);
 
     // send msg
-    struct ibv_sge sge = {0};
-    struct ibv_send_wr wr = {0};
+    struct ibv_sge sge {};
+    struct ibv_send_wr wr {};
     struct ibv_send_wr *bad_wr = NULL;
     sge.addr = (uintptr_t)builder.GetBufferPointer();
     sge.length = builder.GetSize();
@@ -661,19 +663,21 @@ int Connection::r_rdma_async(const std::vector<std::string> &keys,
                              std::function<void(unsigned int code)> callback) {
     assert(base_ptr != NULL);
 
-    if (!local_mr_.count((uintptr_t)base_ptr)) {
-        ERROR("Please register memory first");
+    assert(offsets.size() == keys.size());
+    assert(keys.size() > 0);
+    assert(block_size > 0);
+
+    // search mr from base_ptr
+    struct ibv_mr *mr = mr_contains(base_ptr, 0);
+
+    if (mr == NULL) {
+        ERROR("Please register memory first {}", (uint64_t)base_ptr);
         return -1;
     }
-
-    INFO("r_rdma,, block_size: {}, base_ptr: {}", block_size, base_ptr);
-    struct ibv_mr *mr = local_mr_[(uintptr_t)base_ptr];
-    assert(mr != NULL);
 
     auto *info = new rdma_read_info([callback](unsigned int code) { callback(code); });
     post_recv_ack(info);
 
-    // std::vector<std::string> keys;
     std::vector<uintptr_t> remote_addrs;
     for (auto &offset : offsets) {
         remote_addrs.push_back((uintptr_t)(base_ptr + offset));
@@ -700,12 +704,12 @@ int Connection::r_rdma_async(const std::vector<std::string> &keys,
     builder.Finish(req);
 
     // send RDMA request
-    struct ibv_sge sge = {0};
+    struct ibv_sge sge {};
     sge.addr = (uintptr_t)builder.GetBufferPointer();
     sge.length = builder.GetSize();
     sge.lkey = send_buffer->mr_->lkey;
 
-    struct ibv_send_wr wr = {0};
+    struct ibv_send_wr wr {};
     struct ibv_send_wr *bad_wr = NULL;
 
     wr.wr_id = (uintptr_t)send_buffer;
@@ -725,12 +729,62 @@ int Connection::r_rdma_async(const std::vector<std::string> &keys,
     return 0;
 }
 
+struct ibv_mr *Connection::mr_contains(void *base_ptr, size_t ptr_region_size) {
+    assert(base_ptr != NULL);
+
+    uintptr_t base_ptr_int = (uintptr_t)base_ptr;
+    uintptr_t end_ptr_int = base_ptr_int + ptr_region_size;
+
+    auto it = local_mr_.upper_bound({base_ptr_int, 0});
+    if (it != local_mr_.begin()) {
+        --it;
+        if (it->first.first <= base_ptr_int && it->first.first + it->first.second >= end_ptr_int) {
+            return it->second;
+        }
+    }
+    return nullptr;
+}
+
+bool Connection::mr_overlap(void *base_ptr, size_t ptr_region_size) {
+    assert(base_ptr != NULL);
+
+    uintptr_t base_ptr_int = (uintptr_t)base_ptr;
+    uintptr_t end_ptr_int = base_ptr_int + ptr_region_size;
+
+    auto it = local_mr_.lower_bound({base_ptr_int, 0});
+    if (it != local_mr_.end()) {
+        if (it->first.first < end_ptr_int) {
+            // corner case: allow exactly the same region
+            if (base_ptr_int == it->first.first &&
+                base_ptr_int + ptr_region_size == it->first.first + it->first.second) {
+                WARN("overlap with existing mr, but same region");
+                return false;
+            }
+            return true;
+        }
+    }
+
+    // check the last element
+    if (it != local_mr_.begin()) {
+        --it;
+        size_t prev_end = it->first.first + it->first.second;
+        if (base_ptr_int < prev_end) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
 int Connection::register_mr(void *base_ptr, size_t ptr_region_size) {
     assert(base_ptr != NULL);
-    if (local_mr_.count((uintptr_t)base_ptr)) {
-        WARN("this memory address is already registered!");
-        ibv_dereg_mr(local_mr_[(uintptr_t)base_ptr]);
+
+    // detect overlap of _local_mr_
+    if (mr_overlap(base_ptr, ptr_region_size)) {
+        ERROR("overlap with existing mr");
+        return -1;
     }
+
     struct ibv_mr *mr;
     mr = ibv_reg_mr(rdma_dev_.pd, base_ptr, ptr_region_size,
                     IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE | IBV_ACCESS_REMOTE_READ);
@@ -739,6 +793,6 @@ int Connection::register_mr(void *base_ptr, size_t ptr_region_size) {
         return -1;
     }
     INFO("register mr done for base_ptr: {}, size: {}", (uintptr_t)base_ptr, ptr_region_size);
-    local_mr_[(uintptr_t)base_ptr] = mr;
+    local_mr_.insert({{(uintptr_t)base_ptr, ptr_region_size}, mr});
     return 0;
 }
