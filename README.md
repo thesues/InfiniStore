@@ -33,7 +33,7 @@ Most users just need to deploy and run InfiniStore, and they don't need to under
 pip install infinistore
 ```
 
-## Install from Source Code
+## Development Installation
 
 For users who need to understand how InfiniStore code works or make code contributions to InfiniStore, it's recommended to install from source code:
 
@@ -43,7 +43,7 @@ apt install libflatbuffers-dev
 apt install libspdlog-dev libfmt-dev
 apt install ibverbs-utils libibverbs-dev
 apt install libboost-dev libboost-stacktrace-dev
-pip install -e .
+pip install --no-build-isolation -e .
 pip install pre-commit
 pre-commit install
 ```

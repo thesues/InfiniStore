@@ -29,20 +29,29 @@ def get_version():
 # invoke the make command to build the shared library
 class CustomBuildExt(build_ext):
     def run(self):
+        import glob
+        import shutil
+        import os
+
+        subprocess.check_call(["meson", "setup", "build", "--wipe"], cwd="src")
+        subprocess.check_call(["ninja"], cwd="src/build")
+
+        so_files = glob.glob("src/build/_infinistore*.so")
         if self.inplace:
-            # developer mode
-            print("developer mode: building shared library")
-            subprocess.check_call(["make", "clean"], cwd="src")
-            subprocess.check_call(["make"], cwd="src")
-            super().run()
+            for so_file in so_files:
+                dest = os.path.join("infinistore", os.path.basename(so_file))
+                print(f"Copying {so_file} to {dest}")
+                shutil.copy(so_file, dest)
         else:
-            # package mode, return. build.sh script will build the shared library
-            return
+            build_dir = os.path.join(self.build_lib, "infinistore")
+            for so_file in so_files:
+                build_dest = os.path.join(build_dir, os.path.basename(so_file))
+                print(f"Copying {so_file} to build directory: {build_dest}")
+                shutil.copy(so_file, build_dest)
 
 
 cpp_extension = Extension(name="infinistore._infinistore", sources=[])
 ext_modules = [cpp_extension]
-
 
 setup(
     name="infinistore",
@@ -50,9 +59,14 @@ setup(
     packages=find_packages(),
     cmdclass={"build_ext": CustomBuildExt},
     package_data={
-        "infinistore": ["*.so"],
+        "infinistore": ["_infinistore*.so"],
     },
-    install_requires=["torch", "uvloop", "fastapi", "pybind11", "uvicorn", "numpy"],
+    install_requires=[
+        "uvloop",
+        "fastapi",
+        "uvicorn",
+        "numpy",
+    ],
     description="A kvcache memory pool",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
