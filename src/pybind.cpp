@@ -70,13 +70,21 @@ PYBIND11_MODULE(_infinistore, m) {
                std::function<void(int)> callback) {
                 std::vector<uint64_t> local_address;
                 for (int i = 0; i < keys.size(); i++) {
-                    local_address.push_back((uintptr_t)base_ptr + offsets[i]);
+                    local_address.push_back(base_ptr + offsets[i]);
                 }
                 std::vector<uint32_t> sizes(keys.size(), block_size);
 
                 return self.w_rdma_async(keys, local_address, sizes, callback);
             },
             py::call_guard<py::gil_scoped_release>(), "write rdma async")
+        .def(
+            "w_rdma_async2",
+            [](Connection &self, const std::vector<std::string> &keys,
+               const std::vector<uintptr_t> &local_address,
+               const std::vector<uint32_t> &block_sizes, std::function<void(int)> callback) {
+                return self.w_rdma_async(keys, local_address, block_sizes, callback);
+            },
+            py::call_guard<py::gil_scoped_release>(), "write rdma async2")
         .def(
             "r_rdma_async",
             [](Connection &self, const std::vector<std::string> &keys,
@@ -90,6 +98,14 @@ PYBIND11_MODULE(_infinistore, m) {
                 return self.r_rdma_async(keys, local_address, sizes, callback);
             },
             py::call_guard<py::gil_scoped_release>(), "Read remote memory asynchronously")
+        .def(
+            "r_rdma_async2",
+            [](Connection &self, const std::vector<std::string> &keys,
+               const std::vector<uint64_t> &local_address, const std::vector<uint32_t> &block_sizes,
+               std::function<void(unsigned int)> callback) {
+                return self.r_rdma_async(keys, local_address, block_sizes, callback);
+            },
+            py::call_guard<py::gil_scoped_release>(), "Read remote memory asynchronously2")
         .def("init_connection", &Connection::init_connection,
              py::call_guard<py::gil_scoped_release>(), "init connection")
         .def("setup_rdma", &Connection::setup_rdma, py::call_guard<py::gil_scoped_release>(),

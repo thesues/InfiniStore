@@ -8,6 +8,8 @@ import asyncio
 from functools import singledispatchmethod
 from typing import Optional, Union, List, Tuple
 import socket
+from dataclasses import dataclass
+
 
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -24,7 +26,22 @@ LINK_ETHERNET = "Ethernet"
 LINK_IB = "IB"
 
 
-# Define exceptions which can be caught by the client such as KeyNotFound
+@dataclass
+class Desc:
+    key: str
+    addr: int
+    size: int
+
+    def __iter__(self):
+        return iter((self.key, self.addr, self.size))
+
+    def __post_init__(self):
+        if self.key == "":
+            raise Exception("key is empty")
+        if self.addr == 0:
+            raise Exception("addr is 0")
+        if self.size <= 0:
+            raise Exception("size <= 0")
 
 
 class InfiniStoreException(Exception):
@@ -422,6 +439,54 @@ class InfinityConnection:
         if ret < 0:
             raise Exception(f"Failed to write to infinistore, ret = {ret}")
 
+    async def rdma_write_cache_async2(self, blocks: List[Desc]):
+        """
+        Asynchronously writes a list of blocks to the RDMA cache.
+
+        This method sends the provided blocks to the infinistore using RDMA in an asynchronous manner.
+        It acquires a semaphore to limit concurrent operations, and uses a callback to signal completion.
+        If the RDMA connection is not established, an exception is raised.
+
+        Args:
+            blocks (List[Desc]): A list of tuples, where each tuple contains (key, address, size) describing a block to write.
+
+        Raises:
+            Exception: If the RDMA connection is not established.
+            Exception: If the write operation fails (either synchronously or asynchronously).
+
+        Returns:
+            int: The return code from the RDMA write operation (typically 200 for success).
+
+        """
+        if not self.rdma_connected:
+            raise Exception("this function is only valid for connected rdma")
+
+        await self.semaphore.acquire()
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+
+        keys, addrs, sizes = zip(*blocks)
+
+        def _callback(code):
+            if code != 200:
+                loop.call_soon_threadsafe(
+                    future.set_exception,
+                    Exception(f"Failed to write to infinistore, ret = {code}"),
+                )
+            else:
+                loop.call_soon_threadsafe(future.set_result, code)
+            self.semaphore.release()
+
+        ret = self.conn.w_rdma_async2(
+            keys,
+            addrs,
+            sizes,
+            _callback,
+        )
+        if ret < 0:
+            raise Exception(f"Failed to write to infinistore, ret = {ret}")
+        return await future
+
     async def rdma_write_cache_async(
         self, blocks: List[Tuple[str, int]], block_size: int, ptr: int
     ):
@@ -480,6 +545,57 @@ class InfinityConnection:
             raise Exception(f"Failed to write to infinistore, ret = {ret}")
         return await future
 
+    async def rdma_read_cache_async2(self, blocks: List[Desc]):
+        """
+        Asynchronously reads a batch of blocks from the RDMA cache.
+        This method initiates an asynchronous RDMA read operation for the provided list of blocks.
+        It ensures that the RDMA connection is established and manages concurrency using a semaphore.
+        The method returns when the RDMA read operation completes, or raises an exception if the operation fails.
+        Args:
+            blocks (List[Desc]): A list of block descriptors, where each descriptor is a tuple containing
+                (key, address, size) for the block to be read.
+        Raises:
+            Exception: If the RDMA connection is not established.
+            InfiniStoreKeyNotFound: If some keys are not found in the store (error code 404).
+            Exception: If the RDMA read operation fails with an error code other than 200.
+        Returns:
+            int: The result code (typically 200 for success) from the RDMA read operation.
+        Note:
+            This function should only be called when the RDMA connection is active.
+            It uses a semaphore to limit concurrent RDMA operations.
+        """
+
+        if not self.rdma_connected:
+            raise Exception("this function is only valid for connected rdma")
+        await self.semaphore.acquire()
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        keys, addrs, sizes = zip(*blocks)
+
+        def _callback(code):
+            if code == 404:
+                loop.call_soon_threadsafe(
+                    future.set_exception, InfiniStoreKeyNotFound("some keys not found")
+                )
+            elif code != 200:
+                loop.call_soon_threadsafe(
+                    future.set_exception,
+                    Exception(f"Failed to read to infinistore, ret = {code}"),
+                )
+            else:
+                loop.call_soon_threadsafe(future.set_result, code)
+            self.semaphore.release()
+
+        ret = self.conn.r_rdma_async2(
+            keys,
+            addrs,
+            sizes,
+            _callback,
+        )
+        if ret < 0:
+            raise Exception(f"Failed to read to infinistore, ret = {ret}")
+        return await future
+
     async def rdma_read_cache_async(
         self, blocks: List[Tuple[str, int]], block_size: int, ptr: int
     ):
@@ -509,7 +625,6 @@ class InfinityConnection:
         """
         if not self.rdma_connected:
             raise Exception("this function is only valid for connected rdma")
-        pass
 
         await self.semaphore.acquire()
         loop = asyncio.get_running_loop()

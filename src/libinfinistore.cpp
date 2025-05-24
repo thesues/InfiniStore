@@ -594,7 +594,7 @@ int Connection::w_tcp(const std::string &key, void *ptr, size_t size) {
 }
 
 int Connection::w_rdma_async(const std::vector<std::string> &keys,
-                             const std::vector<uint64_t> &local_address,
+                             const std::vector<uintptr_t> &local_address,
                              const std::vector<uint32_t> &block_sizes,
                              std::function<void(int)> callback) {
     assert(local_address.size() > 0);
@@ -649,7 +649,7 @@ int Connection::w_rdma_async(const std::vector<std::string> &keys,
 }
 
 int Connection::r_rdma_async(const std::vector<std::string> &keys,
-                             const std::vector<uint64_t> &local_address,
+                             const std::vector<uintptr_t> &local_address,
                              const std::vector<uint32_t> &block_sizes,
                              std::function<void(unsigned int)> callback) {
     assert(local_address.size() == keys.size());

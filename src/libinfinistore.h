@@ -104,11 +104,12 @@ class Connection {
     int setup_rdma(client_config_t config);
 
     int r_rdma_async(const std::vector<std::string> &keys,
-                     const std::vector<uint64_t> &local_address, const std::vector<uint32_t> &sizes,
+                     const std::vector<uintptr_t> &local_address,
+                     const std::vector<uint32_t> &sizes,
                      std::function<void(unsigned int)> callback);
     int w_rdma_async(const std::vector<std::string> &keys,
-                     const std::vector<uint64_t> &local_address, const std::vector<uint32_t> &sizes,
-                     std::function<void(int)> callback);
+                     const std::vector<uintptr_t> &local_address,
+                     const std::vector<uint32_t> &sizes, std::function<void(int)> callback);
     int w_tcp(const std::string &key, void *ptr, size_t size);
     std::vector<unsigned char> *r_tcp(const std::string &key);
 

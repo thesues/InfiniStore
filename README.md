@@ -27,6 +27,12 @@ Integration with SGLang and other inference engines are in progress.
 
 ## Install from PIP
 
+RDMA library
+
+```
+apt install ibverbs-utils libibverbs-dev
+```
+
 Most users just need to deploy and run InfiniStore, and they don't need to understand how InfiniStore works internally. For these users, PIP is the recommended way to install:
 
 ```
@@ -47,15 +53,6 @@ apt install libdw-dev
 pip install --no-build-isolation -e .
 pip install pre-commit
 pre-commit install
-```
-
-## Verify Your Installation
-
-After installation, either from PIP or from source code, run the following command to verify your installation is successful:
-
-```
-infinistore --manage-port 8088
-curl http://127.0.0.1:8088/selftest
 ```
 
 # Run InfiniStore
