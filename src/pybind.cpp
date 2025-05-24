@@ -68,7 +68,13 @@ PYBIND11_MODULE(_infinistore, m) {
             [](Connection &self, const std::vector<std::string> &keys,
                const std::vector<size_t> offsets, int block_size, uintptr_t base_ptr,
                std::function<void(int)> callback) {
-                return self.w_rdma_async(keys, offsets, block_size, (void *)base_ptr, callback);
+                std::vector<uint64_t> local_address;
+                for (int i = 0; i < keys.size(); i++) {
+                    local_address.push_back((uintptr_t)base_ptr + offsets[i]);
+                }
+                std::vector<uint32_t> sizes(keys.size(), block_size);
+
+                return self.w_rdma_async(keys, local_address, sizes, callback);
             },
             py::call_guard<py::gil_scoped_release>(), "write rdma async")
         .def(
@@ -76,7 +82,12 @@ PYBIND11_MODULE(_infinistore, m) {
             [](Connection &self, const std::vector<std::string> &keys,
                const std::vector<size_t> offsets, int block_size, uintptr_t base_ptr,
                std::function<void(unsigned int)> callback) {
-                return self.r_rdma_async(keys, offsets, block_size, (void *)base_ptr, callback);
+                std::vector<uint32_t> sizes(keys.size(), block_size);
+                std::vector<uint64_t> local_address;
+                for (int i = 0; i < keys.size(); i++) {
+                    local_address.push_back((uintptr_t)base_ptr + offsets[i]);
+                }
+                return self.r_rdma_async(keys, local_address, sizes, callback);
             },
             py::call_guard<py::gil_scoped_release>(), "Read remote memory asynchronously")
         .def("init_connection", &Connection::init_connection,

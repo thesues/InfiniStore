@@ -332,7 +332,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
         ERROR("Failed to request CQ notification");
         return;
     }
-    struct ibv_wc wc = {0};
+    struct ibv_wc wc = {};
     while (ibv_poll_cq(cq, 1, &wc) > 0) {
         if (wc.status == IBV_WC_SUCCESS) {
             if (wc.opcode == IBV_WC_RECV) {  // recv RDMA read/write request
@@ -502,7 +502,7 @@ void Client::perform_batch_rdma(const RemoteMetaRequest *remote_meta_req,
         wrs[num_wr].sg_list = &sges[num_wr];
         wrs[num_wr].num_sge = 1;
         wrs[num_wr].wr.rdma.remote_addr = remote_meta_req->remote_addrs()->Get(i);
-        wrs[num_wr].wr.rdma.rkey = remote_meta_req->rkey();
+        wrs[num_wr].wr.rdma.rkey = remote_meta_req->rkey()->Get(i);
 
         // wrs[num_wr].wr.rdma.rkey = remote_meta_req->rkey();
         wrs[num_wr].next = (num_wr == max_wr - 1 || i == (int)remote_meta_req->keys()->size() - 1)
@@ -563,26 +563,38 @@ int Client::write_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
         return INVALID_REQ;
     }
 
-    // allocate memory
-    int block_size = remote_meta_req->block_size();
-    int n = remote_meta_req->keys()->size();
+    if (remote_meta_req->rkey()->size() != remote_meta_req->remote_addrs()->size()) {
+        ERROR("keys size and block_size size mismatch");
+        return INVALID_REQ;
+    }
+
+    int n = remote_meta_req->remote_addrs()->size();
 
     // create something.
-
     auto *inflight_rdma_writes = new std::vector<boost::intrusive_ptr<PTR>>;
     inflight_rdma_writes->reserve(n);
 
     evict_cache(ON_DEMAND_MIN_THRESHOLD, ON_DEMAND_MAX_THRESHOLD);
 
+    bool allocated = false;
+
     int key_idx = 0;
-    bool allocated =
-        mm->allocate(block_size, n, [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
-            const auto *key = remote_meta_req->keys()->Get(key_idx);
-            auto ptr = boost::intrusive_ptr<PTR>(new PTR(addr, block_size, pool_idx, key->str()));
-            DEBUG("writing key: {}", key->str());
-            inflight_rdma_writes->push_back(ptr);
-            key_idx++;
-        });
+    for (const auto *key : *remote_meta_req->keys()) {
+        int block_size = remote_meta_req->block_size()->Get(key_idx);
+        allocated = mm->allocate(
+            block_size, 1, [&](void *addr, uint32_t lkey, uint32_t rkey, int pool_idx) {
+                auto ptr =
+                    boost::intrusive_ptr<PTR>(new PTR(addr, block_size, pool_idx, key->str()));
+                DEBUG("writing key: {}", key->str());
+                inflight_rdma_writes->push_back(ptr);
+            });
+        if (!allocated) {
+            ERROR("Failed to allocate memory");
+            delete inflight_rdma_writes;
+            return OUT_OF_MEMORY;
+        }
+        key_idx++;
+    }
 
     if (!allocated) {
         ERROR("Failed to allocate memory");
@@ -609,21 +621,23 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
 
     inflight_rdma_reads->reserve(remote_meta_req->keys()->size());
 
-    for (const auto *key : *remote_meta_req->keys()) {
-        auto it = kv_map.find(key->str());
+    for (int i = 0; i < remote_meta_req->keys()->size(); i++) {
+        auto it = kv_map.find(remote_meta_req->keys()->Get(i)->str());
         if (it == kv_map.end()) {
-            WARN("Key not found: {}", key->str());
+            ERROR("Key not found: {}", remote_meta_req->keys()->Get(i)->str());
+            delete inflight_rdma_reads;
             return KEY_NOT_FOUND;
         }
-        const auto &ptr = it->second;
 
-        if (ptr->size > remote_meta_req->block_size()) {
-            WARN("remote region does not enough size: key:{}, actual size: {}, remote size :{}",
-                 key->str(), ptr->size, remote_meta_req->block_size());
+        const auto &ptr = it->second;
+        if (ptr->size > (size_t)(remote_meta_req->block_size()->Get(i))) {
+            ERROR("remote region does not enough size: key:{}, actual size: {}, remote size :{}",
+                  remote_meta_req->keys()->Get(i)->str(), ptr->size,
+                  remote_meta_req->block_size()->Get(i));
+            delete inflight_rdma_reads;
             return INVALID_REQ;
         }
-
-        inflight_rdma_reads->push_back(ptr);
+        inflight_rdma_reads->push_back(it->second);
     }
 
     // loop over inflight_rdma_reads to update lru_queue
@@ -633,7 +647,7 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
         ptr->lru_it = --lru_queue.end();
     }
 
-    // write to  remote address data from local address
+    // write to remote address data from local address
     perform_batch_rdma(remote_meta_req, inflight_rdma_reads, IBV_WR_RDMA_WRITE);
 
     return 0;

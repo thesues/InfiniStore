@@ -594,41 +594,31 @@ int Connection::w_tcp(const std::string &key, void *ptr, size_t size) {
 }
 
 int Connection::w_rdma_async(const std::vector<std::string> &keys,
-                             const std::vector<size_t> offsets, int block_size, void *base_ptr,
+                             const std::vector<uint64_t> &local_address,
+                             const std::vector<uint32_t> &block_sizes,
                              std::function<void(int)> callback) {
-    assert(base_ptr != NULL);
-    assert(offsets.size() == keys.size());
-
-    // search mr from base_ptr
-
-    // assume all blocks are in the same mr
-    struct ibv_mr *mr = mr_contains(base_ptr, 0);
-    if (mr == NULL) {
-        ERROR("Please register memory first {}", (uint64_t)base_ptr);
-        return -1;
-    }
-
-    // remote_meta_request req = {
-    //     .keys = keys,
-    //     .block_size = block_size,
-    //     .op = OP_RDMA_WRITE,
-    //     .remote_addrs = remote_addrs,
-    // }
+    assert(local_address.size() > 0);
+    assert(local_address.size() == keys.size());
+    assert(keys.size() == block_sizes.size());
 
     SendBuffer *send_buffer = get_send_buffer();
     FixedBufferAllocator allocator(send_buffer->buffer_, PROTOCOL_BUFFER_SIZE);
     FlatBufferBuilder builder(64 << 10, &allocator);
     auto keys_offset = builder.CreateVectorOfStrings(keys);
+    auto remote_addrs_offset = builder.CreateVector(local_address);
+    auto sizes_offset = builder.CreateVector(block_sizes);
 
-    // address is base_ptr + offset
-    std::vector<unsigned long> remote_addrs;
-    for (size_t i = 0; i < offsets.size(); i++) {
-        remote_addrs.push_back((unsigned long)base_ptr + offsets[i]);
+    // build rkey array
+    std::vector<uint32_t> rkeys;
+    for (int i = 0; i < local_address.size(); i++) {
+        uintptr_t address = local_address[i];
+        size_t size = block_sizes[i];
+        auto mr = mr_contains((void *)address, size);
+        rkeys.push_back(mr->rkey);
     }
-    auto remote_addrs_offset = builder.CreateVector(remote_addrs);
-    auto req = CreateRemoteMetaRequest(builder, keys_offset, block_size, mr->rkey,
+    auto rkeys_offset = builder.CreateVector(rkeys);
+    auto req = CreateRemoteMetaRequest(builder, keys_offset, sizes_offset, rkeys_offset,
                                        remote_addrs_offset, OP_RDMA_WRITE);
-
     builder.Finish(req);
 
     // post recv msg first
@@ -659,49 +649,34 @@ int Connection::w_rdma_async(const std::vector<std::string> &keys,
 }
 
 int Connection::r_rdma_async(const std::vector<std::string> &keys,
-                             const std::vector<size_t> offsets, int block_size, void *base_ptr,
-                             std::function<void(unsigned int code)> callback) {
-    assert(base_ptr != NULL);
+                             const std::vector<uint64_t> &local_address,
+                             const std::vector<uint32_t> &block_sizes,
+                             std::function<void(unsigned int)> callback) {
+    assert(local_address.size() == keys.size());
+    assert(block_sizes.size() == keys.size());
 
-    assert(offsets.size() == keys.size());
-    assert(keys.size() > 0);
-    assert(block_size > 0);
-
-    // search mr from base_ptr
-    struct ibv_mr *mr = mr_contains(base_ptr, 0);
-
-    if (mr == NULL) {
-        ERROR("Please register memory first {}", (uint64_t)base_ptr);
-        return -1;
-    }
-
-    auto *info = new rdma_read_info([callback](unsigned int code) { callback(code); });
-    post_recv_ack(info);
-
-    std::vector<uintptr_t> remote_addrs;
-    for (auto &offset : offsets) {
-        remote_addrs.push_back((uintptr_t)(base_ptr + offset));
-    }
-
-    /*
-    remote_meta_req = {
-        .keys = keys,
-        .block_size = block_size,
-        .rkey = mr->rkey,
-        .remote_addrs = remote_addrs,
-        .op = OP_RDMA_READ,
-    }
-    */
     SendBuffer *send_buffer = get_send_buffer();
     FixedBufferAllocator allocator(send_buffer->buffer_, PROTOCOL_BUFFER_SIZE);
     FlatBufferBuilder builder(64 << 10, &allocator);
-
     auto keys_offset = builder.CreateVectorOfStrings(keys);
-    auto remote_addrs_offset = builder.CreateVector(remote_addrs);
-    auto req = CreateRemoteMetaRequest(builder, keys_offset, block_size, mr->rkey,
-                                       remote_addrs_offset, OP_RDMA_READ);
+    auto remote_addrs_offset = builder.CreateVector(local_address);
+    auto sizes_offset = builder.CreateVector(block_sizes);
 
+    // build rkey array
+    std::vector<uint32_t> rkeys;
+    for (int i = 0; i < local_address.size(); i++) {
+        uintptr_t address = local_address[i];
+        size_t size = block_sizes[i];
+        auto mr = mr_contains((void *)address, size);
+        rkeys.push_back(mr->rkey);
+    }
+    auto rkeys_offset = builder.CreateVector(rkeys);
+    auto req = CreateRemoteMetaRequest(builder, keys_offset, sizes_offset, rkeys_offset,
+                                       remote_addrs_offset, OP_RDMA_READ);
     builder.Finish(req);
+
+    auto *info = new rdma_read_info(callback);
+    post_recv_ack(info);
 
     // send RDMA request
     struct ibv_sge sge {};
@@ -728,6 +703,77 @@ int Connection::r_rdma_async(const std::vector<std::string> &keys,
 
     return 0;
 }
+
+// int Connection::r_rdma_async(const std::vector<std::string> &keys,
+//                              const std::vector<size_t> offsets, int block_size, void *base_ptr,
+//                              std::function<void(unsigned int code)> callback) {
+//     assert(base_ptr != NULL);
+
+//     assert(offsets.size() == keys.size());
+//     assert(keys.size() > 0);
+//     assert(block_size > 0);
+
+//     // search mr from base_ptr
+//     struct ibv_mr *mr = mr_contains(base_ptr, 0);
+
+//     if (mr == NULL) {
+//         ERROR("Please register memory first {}", (uint64_t)base_ptr);
+//         return -1;
+//     }
+
+//     auto *info = new rdma_read_info([callback](unsigned int code) { callback(code); });
+//     post_recv_ack(info);
+
+//     std::vector<uintptr_t> remote_addrs;
+//     for (auto &offset : offsets) {
+//         remote_addrs.push_back((uintptr_t)(base_ptr + offset));
+//     }
+
+//     /*
+//     remote_meta_req = {
+//         .keys = keys,
+//         .block_size = block_size,
+//         .rkey = mr->rkey,
+//         .remote_addrs = remote_addrs,
+//         .op = OP_RDMA_READ,
+//     }
+//     */
+//     SendBuffer *send_buffer = get_send_buffer();
+//     FixedBufferAllocator allocator(send_buffer->buffer_, PROTOCOL_BUFFER_SIZE);
+//     FlatBufferBuilder builder(64 << 10, &allocator);
+
+//     auto keys_offset = builder.CreateVectorOfStrings(keys);
+//     auto remote_addrs_offset = builder.CreateVector(remote_addrs);
+//     auto req = CreateRemoteMetaRequest(builder, keys_offset, block_size, mr->rkey,
+//                                        remote_addrs_offset, OP_RDMA_READ);
+
+//     builder.Finish(req);
+
+//     // send RDMA request
+//     struct ibv_sge sge {};
+//     sge.addr = (uintptr_t)builder.GetBufferPointer();
+//     sge.length = builder.GetSize();
+//     sge.lkey = send_buffer->mr_->lkey;
+
+//     struct ibv_send_wr wr {};
+//     struct ibv_send_wr *bad_wr = NULL;
+
+//     wr.wr_id = (uintptr_t)send_buffer;
+//     wr.opcode = IBV_WR_SEND;
+//     wr.sg_list = &sge;
+//     wr.num_sge = 1;
+//     wr.send_flags = IBV_SEND_SIGNALED;
+
+//     int ret;
+//     ret = ibv_post_send(ctx_.qp, &wr, &bad_wr);
+
+//     if (ret) {
+//         ERROR("Failed to post RDMA send :{}", strerror(ret));
+//         return -1;
+//     }
+
+//     return 0;
+// }
 
 struct ibv_mr *Connection::mr_contains(void *base_ptr, size_t ptr_region_size) {
     assert(base_ptr != NULL);
