@@ -9,6 +9,7 @@ default_options: [
   'debug=true'        # -g
 ])
 
+
 python3 = import('python').find_installation('python3', pure: false)
 
 # C/C++ compiler interface
@@ -45,9 +46,9 @@ endforeach
 pybind_dep = dependency('pybind11', required: true)
 libuv_dep     = dependency('libuv', required: true)
 fmt_dep       = dependency('fmt', required: true)
-boost_stack_dep   = dependency('boost', modules: ['stacktrace_basic'], required: true)
 ibverbs_dep  = dependency('libibverbs', required: true)
-
+dw_dep = dependency('libdw', required: true)
+dl_dep = cc.find_library('dl', required: true)
 # Source files for the extension
 ext_sources = [
   'libinfinistore.cpp',
@@ -65,6 +66,13 @@ ext_sources = [
 # Build the Python extension module
 python3.extension_module('_infinistore',
   sources: ext_sources + generated_headers,
-  dependencies: [pybind_dep, libuv_dep, fmt_dep, boost_stack_dep, ibverbs_dep],
+  dependencies: [
+    pybind_dep,
+    libuv_dep,
+    fmt_dep,
+    ibverbs_dep,
+    dl_dep,
+    dw_dep
+    ],
   install: true
 )

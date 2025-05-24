@@ -42,7 +42,8 @@ apt install libuv1-dev
 apt install libflatbuffers-dev
 apt install libspdlog-dev libfmt-dev
 apt install ibverbs-utils libibverbs-dev
-apt install libboost-dev libboost-stacktrace-dev
+apt install libboost-dev
+apt install libdw-dev
 pip install --no-build-isolation -e .
 pip install pre-commit
 pre-commit install

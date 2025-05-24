@@ -298,7 +298,7 @@ int Client::tcp_payload_request(const TCPPayloadRequest *req) {
 
 void Client::post_ack(int return_code) {
     // send an error code back
-    struct ibv_send_wr wr = {0};
+    struct ibv_send_wr wr {};
     struct ibv_send_wr *bad_wr = NULL;
     wr.wr_id = 0;
     wr.opcode = IBV_WR_SEND_WITH_IMM;
@@ -452,8 +452,8 @@ void extend_mempool() {
 }
 
 int Client::prepare_recv_rdma_request(int buf_idx) {
-    struct ibv_sge sge = {0};
-    struct ibv_recv_wr rwr = {0};
+    struct ibv_sge sge {};
+    struct ibv_recv_wr rwr {};
     struct ibv_recv_wr *bad_wr = NULL;
     sge.addr = (uintptr_t)(recv_buffer_[buf_idx]);
     sge.length = PROTOCOL_BUFFER_SIZE;
