@@ -18,6 +18,62 @@ namespace py = pybind11;
 
 extern int register_server(unsigned long loop_ptr, server_config_t config);
 
+namespace {  // Anonymous namespace for helper functions internal to pybind.cpp
+
+uint64_t get_items_total() {
+    return InfiniStoreMetrics::items_total.load();
+}
+
+uint64_t get_memory_allocated_bytes() {
+    return InfiniStoreMetrics::memory_allocated_bytes.load();
+}
+
+uint64_t get_memory_used_bytes() {
+    return InfiniStoreMetrics::memory_used_bytes.load();
+}
+
+uint64_t get_tcp_put_requests_total() {
+    return InfiniStoreMetrics::tcp_put_requests_total.load();
+}
+
+uint64_t get_tcp_get_requests_total() {
+    return InfiniStoreMetrics::tcp_get_requests_total.load();
+}
+
+uint64_t get_tcp_get_hits_total() {
+    return InfiniStoreMetrics::tcp_get_hits_total.load();
+}
+
+uint64_t get_tcp_get_misses_total() {
+    return InfiniStoreMetrics::tcp_get_misses_total.load();
+}
+
+uint64_t get_rdma_write_requests_total() {
+    return InfiniStoreMetrics::rdma_write_requests_total.load();
+}
+
+uint64_t get_rdma_read_requests_total() {
+    return InfiniStoreMetrics::rdma_read_requests_total.load();
+}
+
+uint64_t get_rdma_read_hits_total() {
+    return InfiniStoreMetrics::rdma_read_hits_total.load();
+}
+
+uint64_t get_rdma_read_misses_total() {
+    return InfiniStoreMetrics::rdma_read_misses_total.load();
+}
+
+uint64_t get_evictions_total() {
+    return InfiniStoreMetrics::evictions_total.load();
+}
+
+uint64_t get_lru_queue_size_items() {
+    return InfiniStoreMetrics::lru_queue_size_items.load();
+}
+
+}  // end anonymous namespace
+
 // See https://github.com/pybind/pybind11/issues/1042#issuecomment-642215028
 // as_pyarray is a helper function to convert a C++ sequence to a numpy array and zero-copy
 template <typename Sequence>
@@ -115,6 +171,31 @@ PYBIND11_MODULE(_infinistore, m) {
         "get_kvmap_len", []() { return kv_map.size(); }, "get kv map size");
     m.def("register_server", &register_server, "register the server");
     m.def("evict_cache", &evict_cache, "evict the mempool");
+
+    // Add new metric getters
+    m.def("get_items_total", &get_items_total, "Get the total number of items in the store.");
+    m.def("get_memory_allocated_bytes", &get_memory_allocated_bytes,
+          "Get the total memory allocated by the memory manager.");
+    m.def("get_memory_used_bytes", &get_memory_used_bytes,
+          "Get the total memory used by items in the store.");
+    m.def("get_tcp_put_requests_total", &get_tcp_put_requests_total,
+          "Get the total number of TCP PUT requests.");
+    m.def("get_tcp_get_requests_total", &get_tcp_get_requests_total,
+          "Get the total number of TCP GET requests.");
+    m.def("get_tcp_get_hits_total", &get_tcp_get_hits_total, "Get the total number of TCP GET hits.");
+    m.def("get_tcp_get_misses_total", &get_tcp_get_misses_total,
+          "Get the total number of TCP GET misses.");
+    m.def("get_rdma_write_requests_total", &get_rdma_write_requests_total,
+          "Get the total number of RDMA write requests.");
+    m.def("get_rdma_read_requests_total", &get_rdma_read_requests_total,
+          "Get the total number of RDMA read requests.");
+    m.def("get_rdma_read_hits_total", &get_rdma_read_hits_total,
+          "Get the total number of RDMA read hits.");
+    m.def("get_rdma_read_misses_total", &get_rdma_read_misses_total,
+          "Get the total number of RDMA read misses.");
+    m.def("get_evictions_total", &get_evictions_total, "Get the total number of cache evictions.");
+    m.def("get_lru_queue_size_items", &get_lru_queue_size_items,
+          "Get the current size of the LRU queue.");
 
     // //both side
     m.def("log_msg", &log_msg, "log");

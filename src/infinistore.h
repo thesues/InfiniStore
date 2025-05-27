@@ -1,5 +1,6 @@
 #ifndef INFINISTORE_H
 #define INFINISTORE_H
+#include <atomic>
 #include <uv.h>
 
 #include <list>
@@ -44,5 +45,21 @@ extern std::unordered_map<uintptr_t, boost::intrusive_ptr<PTR>> inflight_rdma_wr
 int register_server(unsigned long loop_ptr, server_config_t config);
 void evict_cache(float min_threshold, float max_threshold);
 void purge_kv_map();
+
+namespace InfiniStoreMetrics {
+extern std::atomic<uint64_t> items_total;
+extern std::atomic<uint64_t> memory_allocated_bytes;
+extern std::atomic<uint64_t> memory_used_bytes;
+extern std::atomic<uint64_t> tcp_put_requests_total;
+extern std::atomic<uint64_t> tcp_get_requests_total;
+extern std::atomic<uint64_t> tcp_get_hits_total;
+extern std::atomic<uint64_t> tcp_get_misses_total;
+extern std::atomic<uint64_t> rdma_write_requests_total;
+extern std::atomic<uint64_t> rdma_read_requests_total;
+extern std::atomic<uint64_t> rdma_read_hits_total;
+extern std::atomic<uint64_t> rdma_read_misses_total;
+extern std::atomic<uint64_t> evictions_total;
+extern std::atomic<uint64_t> lru_queue_size_items;
+}  // namespace InfiniStoreMetrics
 
 #endif

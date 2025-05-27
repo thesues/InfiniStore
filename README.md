@@ -70,8 +70,9 @@ Your server machine may be equipped with TCP network or RDMA network. The comman
 For TCP/IP Network:
 
 ```
-infinistore --service-port 12345
+infinistore --service-port 12345 --manage-port 18080
 ```
+Prometheus metrics will be available on `http://<server_host>:18080/metrics`.
 
 For RDMA(RoCE):
 
@@ -106,6 +107,42 @@ The setup will varies depending on the specific vLLM cluster configurations. But
 Because this setup is a complicated process, we've made a separate demo repo for the PD disaggregation setup.
 
 Please refer to the repo for the details:  https://github.com/bytedance-iaas/splitwise-demos
+
+# Monitoring with Prometheus
+
+InfiniStore exposes internal metrics in a format compatible with Prometheus, allowing for easy monitoring and alerting. The metrics endpoint is automatically available when the InfiniStore server is running.
+
+The metrics are served on the main **management port** (specified by `--manage-port`, default is `18080`) at the `/metrics` path.
+
+For example, if the server is running with the default management port `18080`, the metrics can be accessed at:
+`http://<server_host>:18080/metrics`
+
+If you start the server with a different management port, e.g.:
+```bash
+infinistore --service-port 12345 --manage-port 19090
+```
+Then the metrics will be available at:
+`http://<server_host>:19090/metrics`
+
+### Exposed Metrics
+
+All metrics are exposed as Prometheus Gauges. For metrics that are conceptually counters (e.g., request totals), the gauge value represents the current cumulative total from the C++ backend.
+
+*   `infinistore_items_total`: Total number of items currently active in the store.
+*   `infinistore_memory_allocated_bytes`: Total memory capacity managed by InfiniStore's memory allocator (in bytes).
+*   `infinistore_memory_used_bytes`: Total memory currently consumed by items stored in InfiniStore (in bytes).
+*   `infinistore_lru_queue_size_items`: Current number of items tracked in the LRU (Least Recently Used) queue for cache eviction purposes.
+*   `infinistore_tcp_put_requests_total`: Cumulative count of TCP-based PUT (write) requests processed by the server.
+*   `infinistore_tcp_get_requests_total`: Cumulative count of TCP-based GET (read) requests processed by the server.
+*   `infinistore_tcp_get_hits_total`: Cumulative count of successful TCP GET requests where the key was found (cache hits).
+*   `infinistore_tcp_get_misses_total`: Cumulative count of unsuccessful TCP GET requests where the key was not found (cache misses).
+*   `infinistore_rdma_write_requests_total`: Cumulative count of RDMA-based write batch requests processed.
+*   `infinistore_rdma_read_requests_total`: Cumulative count of RDMA-based read batch requests processed.
+*   `infinistore_rdma_read_hits_total`: Cumulative count of individual keys successfully found and read via RDMA operations.
+*   `infinistore_rdma_read_misses_total`: Cumulative count of individual keys not found during RDMA read operations.
+*   `infinistore_evictions_total`: Cumulative count of items evicted from the cache due to memory pressure or LRU policy.
+
+To monitor InfiniStore, configure your Prometheus server to scrape the `/metrics` endpoint on the configured host and port.
 
 # Contribute to InfiniStore
 

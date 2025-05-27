@@ -11,6 +11,8 @@ import asyncio
 import json
 import ctypes
 from multiprocessing import Process
+import requests # For making HTTP requests to the metrics endpoint
+import re       # For parsing metrics text
 
 
 RDMA_DEV = []
@@ -50,6 +52,59 @@ def server():
         print("Server process failed to start or has already exited.")
         assert False
     yield
+    os.kill(server_process.pid, signal.SIGINT)
+    server_process.wait()
+
+
+@pytest.fixture(scope="module")
+def server_with_metrics():
+    manage_port = 98080 # Management port for FastAPI
+    service_port = 92345 # Data plane port
+    metrics_endpoint_url = f"http://127.0.0.1:{manage_port}/metrics" 
+    
+    server_cmd = [
+        "python",
+        "-m",
+        "infinistore.server",
+        "--dev-name",
+        f"{RDMA_DEV[0]}", 
+        "--link-type",
+        "Ethernet",
+        "--service-port",
+        str(service_port),
+        "--manage-port",
+        str(manage_port)
+        # --metrics-port is REMOVED
+    ]
+    server_process = subprocess.Popen(server_cmd)
+    
+    # Robust check: poll the new /metrics endpoint to ensure server is ready
+    max_retries = 20 # Increased retries
+    retry_interval = 1 # seconds
+    server_ready = False
+    for i in range(max_retries):
+        try:
+            response = requests.get(metrics_endpoint_url, timeout=1) # Increased timeout slightly
+            if response.status_code == 200:
+                print(f"Test Server process with metrics is running (PID: {server_process.pid}). Metrics URL: {metrics_endpoint_url}")
+                server_ready = True
+                break
+        except requests.ConnectionError:
+            # print(f"Metrics endpoint not yet available (attempt {i+1}/{max_retries})...")
+            pass 
+        except requests.ReadTimeout:
+            print(f"Read timeout connecting to metrics endpoint (attempt {i+1}/{max_retries})...")
+            pass 
+        time.sleep(retry_interval)
+
+    if not server_ready:
+        if server_process.poll() is not None:
+             print(f"Server process failed to start or has already exited. Return code: {server_process.returncode}")
+        assert False, f"Server process for metrics test failed to become ready at {metrics_endpoint_url}"
+   
+    yield server_process, metrics_endpoint_url
+    
+    print(f"Stopping server process (PID: {server_process.pid})")
     os.kill(server_process.pid, signal.SIGINT)
     server_process.wait()
 
@@ -512,6 +567,104 @@ def test_delete_keys(server, test_dtype):
 
 def get_ptr(mv: memoryview):
     return ctypes.addressof(ctypes.c_char.from_buffer(mv))
+
+
+def parse_prometheus_metrics(text_content):
+    metrics = {}
+    for line in text_content.splitlines():
+        if line.startswith('#') or not line.strip():
+            continue
+        # Example line: infinistore_items_total 0.0
+        # More complex example: http_requests_total{method="post",code="200"} 1027
+        # For now, we assume simple metrics without labels for simplicity in parsing
+        match = re.match(r'(\w+)(\{[^\}]+\})?\s+([\d\.\+\-eE]+)', line)
+        if match:
+            metric_name = match.group(1)
+            # labels = match.group(2) # Ignoring labels for now
+            value = float(match.group(3))
+            metrics[metric_name] = value
+    return metrics
+
+
+def test_metrics_functionality(server_with_metrics):
+    _, metrics_endpoint_url = server_with_metrics 
+
+    # a. Initial check of the /metrics endpoint
+    try:
+        response = requests.get(metrics_endpoint_url, timeout=5)
+    except requests.exceptions.ConnectionError as e:
+        assert False, f"Failed to connect to metrics endpoint: {metrics_endpoint_url}. Error: {e}"
+    
+    assert response.status_code == 200
+    assert "text/plain" in response.headers["Content-Type"]
+    
+    initial_metrics = parse_prometheus_metrics(response.text)
+    print("Initial metrics:", initial_metrics) # For debugging
+    
+    assert "infinistore_items_total" in initial_metrics
+    assert "infinistore_memory_allocated_bytes" in initial_metrics # Assuming MM is initialized
+    # Initial value of items should be 0 if store is empty
+    assert initial_metrics.get("infinistore_items_total", -1) == 0.0
+
+    # b. Test metrics after some operations (e.g., TCP write and read)
+    client_config = infinistore.ClientConfig(
+        host_addr="127.0.0.1",
+        service_port=92345, # Matches server fixture (service port for client)
+        connection_type=infinistore.TYPE_TCP,
+    )
+    conn = None
+    try:
+        conn = infinistore.InfinityConnection(client_config)
+        conn.connect()
+        
+        key1 = "metrics_test_key1"
+        size1 = 1024
+        data1 = bytearray(random.getrandbits(8) for _ in range(size1))
+        
+        # Perform a write
+        conn.tcp_write_cache(key1, get_ptr(data1), size1)
+
+        response_after_write = requests.get(metrics_endpoint_url, timeout=5)
+        assert response_after_write.status_code == 200
+        metrics_after_write = parse_prometheus_metrics(response_after_write.text)
+        print("Metrics after write:", metrics_after_write)
+
+        assert metrics_after_write.get("infinistore_items_total", 0) == initial_metrics.get("infinistore_items_total", 0) + 1
+        assert metrics_after_write.get("infinistore_tcp_put_requests_total", 0) >= initial_metrics.get("infinistore_tcp_put_requests_total", 0) + 1
+        # memory_used_bytes should also increase
+        assert metrics_after_write.get("infinistore_memory_used_bytes", 0) > initial_metrics.get("infinistore_memory_used_bytes", -1)
+
+
+        # Perform a read (hit)
+        read_data1 = conn.tcp_read_cache(key1)
+        assert read_data1 == data1 # Verify data integrity as a sanity check
+
+        response_after_read_hit = requests.get(metrics_endpoint_url, timeout=5)
+        assert response_after_read_hit.status_code == 200
+        metrics_after_read_hit = parse_prometheus_metrics(response_after_read_hit.text)
+        print("Metrics after read hit:", metrics_after_read_hit)
+
+        assert metrics_after_read_hit.get("infinistore_tcp_get_requests_total", 0) >= metrics_after_write.get("infinistore_tcp_get_requests_total", 0) + 1
+        assert metrics_after_read_hit.get("infinistore_tcp_get_hits_total", 0) >= metrics_after_write.get("infinistore_tcp_get_hits_total", 0) + 1
+
+        # Perform a read for a non-existent key (miss)
+        key_non_existent = "metrics_test_key_non_existent"
+        try:
+            conn.tcp_read_cache(key_non_existent)
+        except infinistore.InfiniStoreKeyNotFound: 
+            pass # Expected
+
+        response_after_read_miss = requests.get(metrics_endpoint_url, timeout=5)
+        assert response_after_read_miss.status_code == 200
+        metrics_after_read_miss = parse_prometheus_metrics(response_after_read_miss.text)
+        print("Metrics after read miss:", metrics_after_read_miss)
+        
+        assert metrics_after_read_miss.get("infinistore_tcp_get_requests_total", 0) >= metrics_after_read_hit.get("infinistore_tcp_get_requests_total", 0) + 1
+        assert metrics_after_read_miss.get("infinistore_tcp_get_misses_total", 0) >= metrics_after_read_hit.get("infinistore_tcp_get_misses_total", 0) + 1
+
+    finally:
+        if conn:
+            conn.close()
 
 
 def test_simple_tcp_read_write(server):

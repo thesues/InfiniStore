@@ -7,9 +7,11 @@ from infinistore import (
     Logger,
     evict_cache,
 )
+from .metrics_exporter import metrics_registry # Import the registry
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST # Prometheus utilities
 import asyncio
 import uvloop
-from fastapi import FastAPI
+from fastapi import FastAPI, Response # Added Response
 import uvicorn
 import argparse
 import logging
@@ -20,6 +22,11 @@ import os
 logging.disable(logging.INFO)
 
 app = FastAPI()
+
+
+@app.get("/metrics", tags=["monitoring"])
+async def metrics():
+    return Response(generate_latest(metrics_registry), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.post("/purge")
@@ -144,6 +151,7 @@ def parse_args():
         help="hint gid index, default 1, -1 means no hint",
         type=int,
     )
+    # Removed --metrics-port argument
 
     return parser.parse_args()
 
@@ -187,6 +195,9 @@ def main():
     prevent_oom()
 
     Logger.info("set oom_score_adj to -1000 to prevent OOM")
+
+    # Removed standalone Prometheus metrics server start logic
+    # The /metrics endpoint is now handled by FastAPI
 
     http_config = uvicorn.Config(
         app, host="0.0.0.0", port=config.manage_port, loop="uvloop"

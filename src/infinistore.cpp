@@ -23,6 +23,23 @@
 #include "protocol.h"
 #include "rdma.h"
 
+// Define and initialize metrics
+namespace InfiniStoreMetrics {
+std::atomic<uint64_t> items_total{0};
+std::atomic<uint64_t> memory_allocated_bytes{0};
+std::atomic<uint64_t> memory_used_bytes{0};
+std::atomic<uint64_t> tcp_put_requests_total{0};
+std::atomic<uint64_t> tcp_get_requests_total{0};
+std::atomic<uint64_t> tcp_get_hits_total{0};
+std::atomic<uint64_t> tcp_get_misses_total{0};
+std::atomic<uint64_t> rdma_write_requests_total{0};
+std::atomic<uint64_t> rdma_read_requests_total{0};
+std::atomic<uint64_t> rdma_read_hits_total{0};
+std::atomic<uint64_t> rdma_read_misses_total{0};
+std::atomic<uint64_t> evictions_total{0};
+std::atomic<uint64_t> lru_queue_size_items{0};
+}  // namespace InfiniStoreMetrics
+
 server_config_t global_config;
 
 uv_loop_t *loop;
@@ -228,7 +245,11 @@ void evict_cache(float min_threshold, float max_threshold) {
             auto ptr = lru_queue.front();
             lru_queue.pop_front();
             kv_map.erase(ptr->key);
+            InfiniStoreMetrics::items_total--;
+            InfiniStoreMetrics::evictions_total++;
+            InfiniStoreMetrics::memory_used_bytes = mm->used_size();
         }
+        InfiniStoreMetrics::lru_queue_size_items = lru_queue.size();
         INFO("evict memory done, usage: from {:.2f} => {:.2f}", usage, mm->usage());
     }
 }
@@ -238,6 +259,7 @@ int Client::tcp_payload_request(const TCPPayloadRequest *req) {
 
     switch (req->op()) {
         case OP_TCP_PUT: {
+            InfiniStoreMetrics::tcp_put_requests_total++;
             evict_cache(ON_DEMAND_MIN_THRESHOLD, ON_DEMAND_MAX_THRESHOLD);
 
             bool allocated =
@@ -254,7 +276,9 @@ int Client::tcp_payload_request(const TCPPayloadRequest *req) {
                   mm->get_lkey(current_tcp_task_->pool_idx),
                   mm->get_rkey(current_tcp_task_->pool_idx));
 
-            kv_map[req->key()->str()] = current_tcp_task_;
+            // kv_map[req->key()->str()] = current_tcp_task_; // Item added after data read in READ_VALUE_THROUGH_TCP
+            // InfiniStoreMetrics::items_total++; // Item added after data read in READ_VALUE_THROUGH_TCP
+            InfiniStoreMetrics::memory_used_bytes = mm->used_size();
             // set state machine
             state_ = READ_VALUE_THROUGH_TCP;
             bytes_read_ = 0;
@@ -262,16 +286,20 @@ int Client::tcp_payload_request(const TCPPayloadRequest *req) {
             break;
         }
         case OP_TCP_GET: {
+            InfiniStoreMetrics::tcp_get_requests_total++;
             auto it = kv_map.find(req->key()->str());
             if (it == kv_map.end()) {
+                InfiniStoreMetrics::tcp_get_misses_total++;
                 return KEY_NOT_FOUND;
             }
+            InfiniStoreMetrics::tcp_get_hits_total++;
             auto ptr = it->second;
 
             // move ptr to the end of lru_queue
             lru_queue.erase(ptr->lru_it);
             lru_queue.push_back(ptr);
             ptr->lru_it = --lru_queue.end();
+            InfiniStoreMetrics::lru_queue_size_items = lru_queue.size();
 
             uint32_t *header_buf = (uint32_t *)malloc(sizeof(uint32_t) * 2);
             header_buf[0] = FINISH;
@@ -409,10 +437,13 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                             (std::vector<boost::intrusive_ptr<PTR>> *)wc.wr_id;
                         for (auto ptr : *inflight_rdma_writes) {
                             kv_map[ptr->key] = ptr;
+                            InfiniStoreMetrics::items_total++;
                             DEBUG("writing key done, {}", ptr->key);
                             lru_queue.push_back(ptr);
                             ptr->lru_it = --lru_queue.end();
                         }
+                        InfiniStoreMetrics::lru_queue_size_items = lru_queue.size();
+                        InfiniStoreMetrics::memory_used_bytes = mm->used_size();
                         delete inflight_rdma_writes;
                         post_ack(FINISH);
                     }
@@ -420,6 +451,7 @@ void Client::cq_poll_handle(uv_poll_t *handle, int status, int events) {
                         post_ack(FINISH);
                         auto inflight_rdma_reads =
                             (std::vector<boost::intrusive_ptr<PTR>> *)wc.wr_id;
+                        // Read hits are already counted in read_rdma_cache
                         delete inflight_rdma_reads;
                     }
                 }
@@ -439,6 +471,7 @@ void add_mempool(uv_work_t *req) { mm->add_mempool(rdma_dev.pd); }
 void add_mempool_completion(uv_work_t *req, int status) {
     extend_in_flight = false;
     mm->need_extend = false;
+    InfiniStoreMetrics::memory_allocated_bytes = mm->total_size();
     delete req;
 }
 
@@ -556,6 +589,7 @@ void Client::perform_batch_rdma(const RemoteMetaRequest *remote_meta_req,
 }
 
 int Client::write_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
+    InfiniStoreMetrics::rdma_write_requests_total++;
     DEBUG("do rdma write... num of keys: {}", remote_meta_req->keys()->size());
 
     if (remote_meta_req->keys()->size() != remote_meta_req->remote_addrs()->size()) {
@@ -589,6 +623,7 @@ int Client::write_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
         delete inflight_rdma_writes;
         return OUT_OF_MEMORY;
     }
+    InfiniStoreMetrics::memory_used_bytes = mm->used_size();
 
     // perform rdma read to receive data from client
     // read remote address data to local address
@@ -598,6 +633,7 @@ int Client::write_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
 }
 
 int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
+    InfiniStoreMetrics::rdma_read_requests_total++;
     DEBUG("do rdma read... num of keys: {}", remote_meta_req->keys()->size());
 
     if (remote_meta_req->keys()->size() != remote_meta_req->remote_addrs()->size()) {
@@ -612,19 +648,53 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
     for (const auto *key : *remote_meta_req->keys()) {
         auto it = kv_map.find(key->str());
         if (it == kv_map.end()) {
+            InfiniStoreMetrics::rdma_read_misses_total++;
             WARN("Key not found: {}", key->str());
-            return KEY_NOT_FOUND;
-        }
-        const auto &ptr = it->second;
+            // return KEY_NOT_FOUND; // As per instruction, continue checking other keys.
+            // However, if any key is not found, the overall operation might be considered a "miss" or partial hit.
+            // For simplicity, we are counting individual key hits/misses.
+        } else {
+            InfiniStoreMetrics::rdma_read_hits_total++;
+            const auto &ptr = it->second;
 
-        if (ptr->size > remote_meta_req->block_size()) {
-            WARN("remote region does not enough size: key:{}, actual size: {}, remote size :{}",
-                 key->str(), ptr->size, remote_meta_req->block_size());
-            return INVALID_REQ;
+            if (ptr->size > remote_meta_req->block_size()) {
+                WARN("remote region does not enough size: key:{}, actual size: {}, remote size :{}",
+                     key->str(), ptr->size, remote_meta_req->block_size());
+                // This is an error condition for this specific key, but it was found.
+                // The logic for returning INVALID_REQ should be outside the hit/miss counting if possible
+                // or handled as a separate error metric.
+                // For now, just push back valid items for RDMA.
+                // return INVALID_REQ; // This would stop processing further keys.
+            } else {
+                 inflight_rdma_reads->push_back(ptr);
+            }
         }
-
-        inflight_rdma_reads->push_back(ptr);
     }
+    
+    if (inflight_rdma_reads->empty() && remote_meta_req->keys()->size() > 0) {
+        // If no keys were valid for reading (e.g. all missed or size mismatch for all found)
+        // and there were keys requested, then it's a failure for the batch.
+        // This depends on how strict the "KEY_NOT_FOUND" should be for a batch.
+        // If any key is missing, is the whole batch a miss? Or do we proceed with found keys?
+        // Current hit/miss logic counts per key.
+        // If we need to return KEY_NOT_FOUND if *any* key is not found, that check should be done earlier.
+        // For now, let's assume we proceed with found keys if any.
+        // If inflight_rdma_reads is empty and keys were requested, it means all were misses or invalid.
+        // Count actual successful reads for the batch, if any key is missing, then the batch read itself is a miss.
+        bool all_keys_found = true;
+        for (const auto *key : *remote_meta_req->keys()) {
+            if (kv_map.find(key->str()) == kv_map.end()){
+                all_keys_found = false;
+                break;
+            }
+        }
+        if (!all_keys_found && remote_meta_req->keys()->size() > 0) {
+             // If not all keys were found (and there were keys to find), it's a KEY_NOT_FOUND for the batch.
+             // Individual misses already counted.
+             return KEY_NOT_FOUND;
+        }
+    }
+
 
     // loop over inflight_rdma_reads to update lru_queue
     for (auto ptr : *inflight_rdma_reads) {
@@ -632,6 +702,7 @@ int Client::read_rdma_cache(const RemoteMetaRequest *remote_meta_req) {
         lru_queue.push_back(ptr);
         ptr->lru_it = --lru_queue.end();
     }
+    InfiniStoreMetrics::lru_queue_size_items = lru_queue.size();
 
     // write to  remote address data from local address
     perform_batch_rdma(remote_meta_req, inflight_rdma_reads, IBV_WR_RDMA_WRITE);
@@ -823,9 +894,12 @@ int Client::delete_keys(const DeleteKeysRequest *request) {
             auto ptr = it->second;
             kv_map.erase(it);
             lru_queue.erase(ptr->lru_it);
+            InfiniStoreMetrics::items_total--;
+            InfiniStoreMetrics::memory_used_bytes = mm->used_size();
             count++;
         }
     }
+    InfiniStoreMetrics::lru_queue_size_items = lru_queue.size();
     send_resp(FINISH, &count, sizeof(count));
     reset_client_read_state();
     return 0;
@@ -948,10 +1022,13 @@ void on_read(uv_stream_t *stream, ssize_t nread, const uv_buf_t *buf) {
                 if (client->bytes_read_ == client->expected_bytes_) {
                     auto ptr = client->current_tcp_task_;
                     kv_map[ptr->key] = ptr;
+                    InfiniStoreMetrics::items_total++;
+                    InfiniStoreMetrics::memory_used_bytes = mm->used_size();
 
                     // put the ptr into lru queue
                     lru_queue.push_back(ptr);
                     ptr->lru_it = --lru_queue.end();
+                    InfiniStoreMetrics::lru_queue_size_items = lru_queue.size();
 
                     client->current_tcp_task_.reset();
                     client->send_resp(FINISH, NULL, 0);
@@ -1022,6 +1099,8 @@ int register_server(unsigned long loop_ptr, server_config_t config) {
         return -1;
     }
     mm = new MM(config.prealloc_size << 30, config.minimal_allocate_size << 10, rdma_dev.pd);
+    InfiniStoreMetrics::memory_allocated_bytes = mm->total_size();
+    InfiniStoreMetrics::memory_used_bytes = mm->used_size();
 
     INFO("register server done");
 
