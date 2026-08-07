@@ -42,6 +42,7 @@ int TcpConnection::connect(uv_loop_t *loop, const std::string &host, int port,
     }
 
     loop_ = loop;
+    loop_thread_ = uv_thread_self();
     handle_ = (uv_tcp_t *)malloc(sizeof(uv_tcp_t));
     if (handle_ == NULL) {
         ERROR("Failed to allocate tcp handle");
@@ -114,10 +115,24 @@ void TcpConnection::on_connected(int status) {
     flush_queue();
 }
 
+bool TcpConnection::on_loop_thread() const {
+    uv_thread_t self = uv_thread_self();
+    return uv_thread_equal(&loop_thread_, &self) != 0;
+}
+
 int TcpConnection::request(std::vector<char> head, const void *payload, size_t payload_size,
                            const RespSpec &resp, ResponseCallback cb) {
     if (closing_ || handle_ == NULL) {
         ERROR("connection is closed");
+        return -1;
+    }
+
+    /*
+    Everything here is single threaded by design: the queue and the read state are
+    only touched from the loop. Reject the call instead of corrupting them.
+    */
+    if (!on_loop_thread()) {
+        ERROR("the connection is used from a thread other than the one running its loop");
         return -1;
     }
 

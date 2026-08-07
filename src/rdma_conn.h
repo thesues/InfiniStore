@@ -85,7 +85,9 @@ class RdmaConnection {
 
     /*
     Register a memory region. This pins the pages, it takes a while for a large
-    region and it is synchronous, so do not call it from the loop thread.
+    region and it is synchronous, so it is the one call which is meant to be made
+    off the loop thread. It must not overlap with in flight requests on this
+    connection though, they read the same map from the loop.
     */
     int register_mr(void *base_ptr, size_t ptr_region_size);
 
@@ -101,6 +103,8 @@ class RdmaConnection {
                           const std::vector<size_t> &offsets, int block_size, void *base_ptr,
                           char op, rdma_info_base *info);
     void post_recv_ack(rdma_info_base *info);
+    // true when the caller is on the loop this connection runs on
+    bool on_loop_thread() const;
     // one completion channel event: ack it, rearm and drain the CQ
     void poll_cq();
     static void poll_cb(uv_poll_t *handle, int status, int events);
@@ -128,6 +132,9 @@ class RdmaConnection {
     object may be gone.
     */
     uv_poll_t *poll_handle_ = NULL;
+    // the thread which runs the loop, recorded when the connection is set up.
+    // Only read to reject calls from elsewhere, no synchronization involved.
+    uv_thread_t loop_thread_ = {};
 };
 
 #endif  // RDMA_CONN_H

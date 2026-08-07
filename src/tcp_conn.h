@@ -67,6 +67,9 @@ class TcpConnection {
     // fail everything still in flight and close the handle, safe to call twice
     void close();
 
+    // true when the caller is on the loop this connection runs on
+    bool on_loop_thread() const;
+
     bool connected() const { return connected_; }
 
    private:
@@ -99,6 +102,9 @@ class TcpConnection {
     };
 
     uv_loop_t *loop_ = NULL;
+    // the thread which runs loop_, recorded when the connection is set up. Only
+    // read to reject calls from elsewhere, no synchronization involved.
+    uv_thread_t loop_thread_ = {};
     // heap allocated: libuv needs the memory to stay valid until the close
     // callback has run, which is after this object may be gone
     uv_tcp_t *handle_ = NULL;

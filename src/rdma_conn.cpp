@@ -56,6 +56,7 @@ int RdmaConnection::connect(uv_loop_t *loop, const rdma_conn_info_t &remote_info
     }
 
     remote_info_ = remote_info;
+    loop_thread_ = uv_thread_self();
 
     print_rdma_conn_info(&remote_info_, true);
     print_rdma_conn_info(&local_info_, false);
@@ -150,6 +151,11 @@ void RdmaConnection::release_send_buffer(SendBuffer *buffer) {
     send_buffers_.push_back(buffer);
 }
 
+bool RdmaConnection::on_loop_thread() const {
+    uv_thread_t self = uv_thread_self();
+    return uv_thread_equal(&loop_thread_, &self) != 0;
+}
+
 void RdmaConnection::post_recv_ack(rdma_info_base *info) {
     struct ibv_recv_wr recv_wr = {};
     struct ibv_recv_wr *bad_recv_wr = NULL;
@@ -171,6 +177,22 @@ int RdmaConnection::post_meta_request(const std::vector<std::string> &keys,
                                       void *base_ptr, char op, rdma_info_base *info) {
     assert(base_ptr != NULL);
     assert(offsets.size() == keys.size());
+
+    if (poll_handle_ == NULL) {
+        ERROR("the rdma connection is not established");
+        delete info;
+        return -1;
+    }
+
+    /*
+    The send buffers and the completion handling are single threaded by design,
+    everything runs on the loop. Reject the call instead of corrupting them.
+    */
+    if (!on_loop_thread()) {
+        ERROR("the connection is used from a thread other than the one running its loop");
+        delete info;
+        return -1;
+    }
 
     auto mr_it = local_mr_.find((uintptr_t)base_ptr);
     if (mr_it == local_mr_.end()) {
