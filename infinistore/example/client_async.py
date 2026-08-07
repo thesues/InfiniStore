@@ -25,9 +25,7 @@ async def main():
     while True:
         rdma_conn = infinistore.InfinityConnection(config)
 
-        # FIXME: This is a blocking call, should be async
-        # await rdma_conn.connect_async()
-        rdma_conn.connect()
+        await rdma_conn.connect_async()
 
         src_tensor = torch.tensor(
             [i for i in range(4096)], device="cpu", dtype=torch.float32

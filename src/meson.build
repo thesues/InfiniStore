@@ -59,6 +59,7 @@ ext_sources = [
   'mempool.cpp',
   'rdma.cpp',
   'rdma_conn.cpp',
+  'tcp_conn.cpp',
   'pybind.cpp'
 ]
 

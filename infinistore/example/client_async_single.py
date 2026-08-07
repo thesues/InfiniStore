@@ -1,6 +1,7 @@
 import infinistore
 import uuid
 import asyncio
+import uvloop
 import ctypes
 import time
 
@@ -27,7 +28,6 @@ def get_ptr(mv: memoryview):
 async def main():
     rdma_conn = infinistore.InfinityConnection(config)
 
-    # FIXME: This is a blocking call, should be async
     await rdma_conn.connect_async()
 
     key = generate_uuid()
@@ -48,7 +48,7 @@ async def main():
     for i in range(size):
         src[i] = i % 256
 
-    is_exist = await asyncio.to_thread(rdma_conn.check_exist, key)
+    is_exist = await rdma_conn.check_exist_async(key)
     assert not is_exist
 
     now = time.time()
@@ -76,4 +76,7 @@ async def main():
     rdma_conn.close()
 
 
-asyncio.run(main())
+# the connection runs on this loop, it has to be a uvloop one
+loop = uvloop.new_event_loop()
+asyncio.set_event_loop(loop)
+loop.run_until_complete(main())

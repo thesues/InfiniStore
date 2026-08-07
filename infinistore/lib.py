@@ -16,6 +16,40 @@ os.environ["OMP_NUM_THREADS"] = "1"
 import numpy as np
 
 
+def _uv_loop_ptr(loop):
+    """
+    Return the uv_loop_t* behind a uvloop event loop, the C++ side runs its
+    connections on it.
+    """
+    try:
+        from uvloop.loop import libuv_get_loop_t_ptr
+    except ImportError:
+        raise Exception("infinistore requires uvloop")
+
+    import ctypes
+    from ctypes import pythonapi, c_void_p, py_object
+
+    try:
+        capsule = libuv_get_loop_t_ptr(loop)
+    except (TypeError, AttributeError):
+        raise Exception(f"infinistore requires a uvloop event loop, got {type(loop)}")
+
+    PyCapsule_GetPointer = pythonapi.PyCapsule_GetPointer
+    PyCapsule_GetPointer.restype = c_void_p
+    PyCapsule_GetPointer.argtypes = [py_object, ctypes.c_char_p]
+    return PyCapsule_GetPointer(capsule, None)
+
+
+def _settle(future, ret, message):
+    """Resolve a future from a C++ callback: negative means failure."""
+    if future.done():
+        return
+    if ret < 0:
+        future.set_exception(Exception(f"{message}, ret = {ret}"))
+    else:
+        future.set_result(ret)
+
+
 # connection type: default is RDMA
 TYPE_RDMA = "RDMA"
 TYPE_TCP = "TCP"
@@ -214,18 +248,7 @@ def register_server(loop, config: ServerConfig):
         Exception: If the server registration fails.
     """
     # client does not need to call this function
-    from uvloop.loop import libuv_get_loop_t_ptr
-    import ctypes
-    from ctypes import pythonapi, c_void_p, py_object
-
-    PyCapsule_GetPointer = pythonapi.PyCapsule_GetPointer
-    PyCapsule_GetPointer.restype = c_void_p
-    PyCapsule_GetPointer.argtypes = [py_object, ctypes.c_char_p]
-    loop_ptr = PyCapsule_GetPointer(libuv_get_loop_t_ptr(loop), None)
-
-    # from cpython.pycapsule import PyCapsule_GetPointer
-    # <uint64_t>PyCapsule_GetPointer(obj, NULL)
-    if _infinistore.register_server(loop_ptr, config) < 0:
+    if _infinistore.register_server(_uv_loop_ptr(loop), config) < 0:
         raise Exception("Failed to register server")
 
 
@@ -303,35 +326,100 @@ class InfinityConnection:
         self.rdma_connected = False
         self.config = config
 
+        # the connection lives on this uv loop. It is the caller's loop when there
+        # is a running one, otherwise we run a private loop for the sync API.
+        self._loop = None
+        self._owns_loop = False
+
         # used for async io
         self.semaphore = asyncio.BoundedSemaphore(128)
         Logger.set_log_level(config.log_level)
+
+    def _ensure_loop(self):
+        """
+        Pick the loop this connection runs on: the caller's if one is running,
+        otherwise a private one which the sync API drives with run_until_complete.
+        """
+        if self._loop is not None:
+            return self._loop
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is None:
+            import uvloop
+
+            loop = uvloop.new_event_loop()
+            self._owns_loop = True
+
+        self._loop = loop
+        return loop
+
+    def _bound_loop(self):
+        """The loop the connection is on, checked against the running one."""
+        if self._loop is None:
+            raise Exception("not connected")
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is not None and running is not self._loop:
+            raise Exception(
+                "this connection is bound to another event loop, connect it from "
+                "the loop you are using it on"
+            )
+        return self._loop
+
+    def _run_sync(self, coro):
+        """Drive a coroutine from synchronous code."""
+        loop = self._ensure_loop()
+        if loop.is_running():
+            coro.close()
+            raise Exception(
+                "the sync API can not be called from a running event loop, "
+                "use the *_async variant"
+            )
+        return loop.run_until_complete(coro)
 
     async def connect_async(self):
         """
         Asynchronously establishes a connection based on the configuration.
 
+        The connection runs on the caller's event loop, which has to be a uvloop
+        one, and stays bound to it.
+
         Raises:
             Exception: If the initialization of the remote connection fails.
             Exception: If the setup of the RDMA connection fails.
-
-        Logs:
-            A warning indicating that the async connect may have bugs.
-
-        This method runs the blocking connection setup in an executor to avoid blocking the event loop.
         """
-        loop = asyncio.get_running_loop()
+        loop = self._ensure_loop()
+        self.config.host_addr = self.resolve_hostname(self.config.host_addr)
 
-        def blocking_connect():
-            self.config.host_addr = self.resolve_hostname(self.config.host_addr)
-            if self.conn.init_connection(self.config) < 0:
-                raise Exception("Failed to initialize remote connection")
-            if self.config.connection_type == TYPE_RDMA:
-                if self.conn.setup_rdma(self.config) < 0:
-                    raise Exception("Failed to setup RDMA connection")
-                self.rdma_connected = True
+        future = loop.create_future()
 
-        await loop.run_in_executor(None, blocking_connect)
+        def _callback(ret):
+            loop.call_soon_threadsafe(
+                _settle, future, ret, "Failed to initialize remote connection"
+            )
+
+        if self.conn.init_connection(self.config, _uv_loop_ptr(loop), _callback) < 0:
+            raise Exception("Failed to initialize remote connection")
+        await future
+
+        if self.config.connection_type == TYPE_RDMA:
+            rdma_future = loop.create_future()
+
+            def _rdma_callback(ret):
+                loop.call_soon_threadsafe(
+                    _settle, rdma_future, ret, "Failed to setup RDMA connection"
+                )
+
+            if self.conn.setup_rdma(self.config, _rdma_callback) < 0:
+                raise Exception("Failed to setup RDMA connection")
+            await rdma_future
+            self.rdma_connected = True
 
     @staticmethod
     def resolve_hostname(hostname: str) -> str:
@@ -356,6 +444,9 @@ class InfinityConnection:
         """
         Establishes a connection to the Infinistore instance based on the configuration.
 
+        This drives a private event loop, so it can not be called while an event
+        loop is running, use connect_async() there.
+
         Raises:
             Exception: If already connected to a remote instance.
             Exception: If failed to initialize remote connection.
@@ -364,24 +455,86 @@ class InfinityConnection:
         if self.rdma_connected:
             raise Exception("Already connected to remote instance")
 
-        self.config.host_addr = self.resolve_hostname(self.config.host_addr)
-
-        # check if the hostname is valid
-        ret = self.conn.init_connection(self.config)
-        if ret < 0:
-            raise Exception("Failed to initialize remote connection")
-
-        if self.config.connection_type == TYPE_RDMA:
-            ret = self.conn.setup_rdma(self.config)
-            if ret < 0:
-                raise Exception(f"Failed to write to infinistore, ret = {ret}")
-            self.rdma_connected = True
+        self._run_sync(self.connect_async())
 
     def close(self):
         """
         Closes the connection to the Infinistore instance.
         """
         self.conn.close()
+        if self._owns_loop and self._loop is not None and not self._loop.is_running():
+            self._loop.close()
+            self._loop = None
+            self._owns_loop = False
+
+    async def tcp_read_cache_async(self, key: str, **kwargs) -> np.ndarray:
+        """
+        Retrieve a single cached item over the TCP connection.
+
+        Parameters:
+        key (str): The key associated with the cached item.
+
+        Returns:
+        np.ndarray: The cached item retrieved from the TCP connection.
+
+        Raises:
+            InfiniStoreKeyNotFound: If the key is not in the store.
+            Exception: If the read fails.
+        """
+        loop = self._bound_loop()
+        future = loop.create_future()
+
+        def _callback(code, array):
+            if future.done():
+                return
+            if code == 404:
+                loop.call_soon_threadsafe(
+                    future.set_exception, InfiniStoreKeyNotFound(f"key not found: {key}")
+                )
+            elif code != 200:
+                loop.call_soon_threadsafe(
+                    future.set_exception,
+                    Exception(f"Failed to read from infinistore, ret = {code}"),
+                )
+            else:
+                loop.call_soon_threadsafe(future.set_result, array)
+
+        if self.conn.r_tcp(key, _callback) < 0:
+            raise Exception("Failed to read from infinistore")
+        return await future
+
+    async def tcp_write_cache_async(self, key: str, ptr: int, size: int, **kwargs):
+        """
+        Write a single cache entry to the remote memory over TCP.
+
+        Args:
+            key (str): The key of the cache entry to write.
+            ptr (int): Pointer to the data. It has to stay alive until this
+                coroutine returns, the data is sent from the event loop.
+            size (int): The size of the data to write.
+
+        Raises:
+            Exception: If the key is empty, the size is 0, the pointer is 0, or
+                the write operation fails.
+        """
+        if key == "":
+            raise Exception("key is empty")
+        if size == 0:
+            raise Exception("size is 0")
+        if ptr == 0:
+            raise Exception("ptr is 0")
+
+        loop = self._bound_loop()
+        future = loop.create_future()
+
+        def _callback(ret):
+            loop.call_soon_threadsafe(
+                _settle, future, ret, "Failed to write to infinistore"
+            )
+
+        if self.conn.w_tcp(key, ptr, size, _callback) < 0:
+            raise Exception("Failed to write to infinistore")
+        await future
 
     def tcp_read_cache(self, key: str, **kwargs) -> np.ndarray:
         """
@@ -394,7 +547,7 @@ class InfinityConnection:
         Returns:
         np.ndarray: The cached item retrieved from the TCP connection.
         """
-        return self.conn.r_tcp(key)
+        return self._run_sync(self.tcp_read_cache_async(key, **kwargs))
 
     def tcp_write_cache(self, key: str, ptr: int, size: int, **kwargs):
         """
@@ -402,25 +555,14 @@ class InfinityConnection:
 
         Args:
             key (str): The key of the cache entry to write.
-            ptr (int): The pointer to the memory location where the data should be written.
+            ptr (int): The pointer to the memory location holding the data.
             size (int): The size of the data to write.
-            **kwargs: Additional keyword arguments.
 
         Raises:
-            Exception: If the key is empty.
-            Exception: If the size is 0.
-            Exception: If the pointer is 0.
-            Exception: If the write operation fails.
+            Exception: If the key is empty, the size is 0, the pointer is 0, or
+                the write operation fails.
         """
-        if key == "":
-            raise Exception("key is empty")
-        if size == 0:
-            raise Exception("size is 0")
-        if ptr == 0:
-            raise Exception("ptr is 0")
-        ret = self.conn.w_tcp(key, ptr, size)
-        if ret < 0:
-            raise Exception(f"Failed to write to infinistore, ret = {ret}")
+        return self._run_sync(self.tcp_write_cache_async(key, ptr, size, **kwargs))
 
     async def rdma_write_cache_async(
         self, blocks: List[Tuple[str, int]], block_size: int, ptr: int
@@ -541,6 +683,27 @@ class InfinityConnection:
             raise Exception(f"Failed to read to infinistore, ret = {ret}")
         return await future
 
+    async def check_exist_async(self, key: str):
+        """
+        Check if a given key exists in the store.
+
+        Returns:
+            bool: True if the key exists, False otherwise.
+        """
+        loop = self._bound_loop()
+        future = loop.create_future()
+
+        def _callback(ret):
+            loop.call_soon_threadsafe(
+                _settle, future, ret, "Failed to check if this key exists"
+            )
+
+        if self.conn.check_exist(key, _callback) < 0:
+            raise Exception("Failed to check if this key exists")
+        # the server answers 0 when the key is there
+        ret = await future
+        return ret == 0
+
     def check_exist(self, key: str):
         """
         Check if a given key exists in the store.
@@ -554,10 +717,24 @@ class InfinityConnection:
         Raises:
             Exception: If there is an error checking the key's existence.
         """
-        ret = self.conn.check_exist(key)
-        if ret < 0:
-            raise Exception("Failed to check if this key exists")
-        return True if ret == 0 else False
+        return self._run_sync(self.check_exist_async(key))
+
+    async def get_match_last_index_async(self, keys: List[str]):
+        """
+        Retrieve the last index of a match for the given keys.
+
+        Returns:
+            int: The last index of a match.
+        """
+        loop = self._bound_loop()
+        future = loop.create_future()
+
+        def _callback(ret):
+            loop.call_soon_threadsafe(_settle, future, ret, "can't find a match")
+
+        if self.conn.get_match_last_index(keys, _callback) < 0:
+            raise Exception("can't find a match")
+        return await future
 
     def get_match_last_index(self, keys: List[str]):
         """
@@ -572,10 +749,7 @@ class InfinityConnection:
         Raises:
             Exception: If no match is found (i.e., if the return value is negative).
         """
-        ret = self.conn.get_match_last_index(keys)
-        if ret < 0:
-            raise Exception("can't find a match")
-        return ret
+        return self._run_sync(self.get_match_last_index_async(keys))
 
     @singledispatchmethod
     def register_mr(self, arg: Union[int], size: Optional[int] = None):
@@ -615,6 +789,30 @@ class InfinityConnection:
             raise Exception("register memory region failed")
         return ret
 
+    async def delete_keys_async(self, keys: List[str]):
+        """
+        Delete a list of keys.
+
+        Returns:
+            int: The count of the deleted keys
+        """
+        loop = self._bound_loop()
+        future = loop.create_future()
+
+        def _callback(ret):
+            loop.call_soon_threadsafe(
+                _settle,
+                future,
+                ret,
+                "somethings are wrong, not all the specified keys were deleted",
+            )
+
+        if self.conn.delete_keys(keys, _callback) < 0:
+            raise Exception(
+                "somethings are wrong, not all the specified keys were deleted"
+            )
+        return await future
+
     def delete_keys(self, keys: List[str]):
         """
         Delete a list of keys
@@ -628,9 +826,4 @@ class InfinityConnection:
         Raises:
             Exception: If there is something wrong(return value is -1)
         """
-        ret = self.conn.delete_keys(keys)
-        if ret < 0:
-            raise Exception(
-                "somethings are wrong, not all the specified keys were deleted"
-            )
-        return ret
+        return self._run_sync(self.delete_keys_async(keys))
