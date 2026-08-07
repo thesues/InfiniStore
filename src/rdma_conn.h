@@ -84,10 +84,12 @@ class RdmaConnection {
     void stop();
 
     /*
-    Register a memory region. This pins the pages, it takes a while for a large
-    region and it is synchronous, so it is the one call which is meant to be made
-    off the loop thread. It must not overlap with in flight requests on this
-    connection though, they read the same map from the loop.
+    Register a memory region. Like everything else it has to be called on the
+    loop thread, the map it writes is read there when requests are posted.
+
+    NOTE: this pins the pages, so it holds up the loop for as long as that takes.
+    It is a setup time call. If that ever becomes a problem the ibv_reg_mr itself
+    can be moved to uv_queue_work, with the map only touched in the completion.
     */
     int register_mr(void *base_ptr, size_t ptr_region_size);
 

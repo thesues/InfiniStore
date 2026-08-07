@@ -265,6 +265,12 @@ int RdmaConnection::post_read(const std::vector<std::string> &keys,
 
 int RdmaConnection::register_mr(void *base_ptr, size_t ptr_region_size) {
     assert(base_ptr != NULL);
+
+    if (poll_handle_ != NULL && !on_loop_thread()) {
+        ERROR("the connection is used from a thread other than the one running its loop");
+        return -1;
+    }
+
     if (local_mr_.count((uintptr_t)base_ptr)) {
         WARN("this memory address is already registered!");
         ibv_dereg_mr(local_mr_[(uintptr_t)base_ptr]);

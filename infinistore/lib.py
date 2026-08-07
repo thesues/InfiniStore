@@ -8,6 +8,7 @@ import asyncio
 from functools import singledispatchmethod
 from typing import Optional, Union, List, Tuple
 import socket
+import threading
 
 os.environ["OPENBLAS_NUM_THREADS"] = "1"
 os.environ["MKL_NUM_THREADS"] = "1"
@@ -40,37 +41,71 @@ def _uv_loop_ptr(loop):
     return PyCapsule_GetPointer(capsule, None)
 
 
-_default_loop = None
+_background_loop = None
+_background_lock = threading.Lock()
 
 
-def _get_default_loop():
+def _get_background_loop():
     """
-    The loop infinistore falls back to when the caller has none of its own.
+    A uvloop event loop running in a daemon thread of its own.
 
-    It is process wide on purpose: connections established with the synchronous
-    connect() all live on it, so a coroutine may use several of them.
+    Connections established with the synchronous API live on it, so blocking
+    callers do not need an event loop of their own. It is process wide on
+    purpose: a coroutine may use several connections.
     """
-    global _default_loop
-    if _default_loop is None or _default_loop.is_closed():
+    global _background_loop
+    with _background_lock:
+        if _background_loop is not None:
+            return _background_loop
+
         import uvloop
 
-        _default_loop = uvloop.new_event_loop()
-    return _default_loop
+        loop = uvloop.new_event_loop()
+        ready = threading.Event()
+
+        def _run():
+            asyncio.set_event_loop(loop)
+            loop.call_soon(ready.set)
+            loop.run_forever()
+
+        thread = threading.Thread(target=_run, name="infinistore-io", daemon=True)
+        thread.start()
+        ready.wait()
+
+        _background_loop = loop
+        return _background_loop
+
+
+def _submit(loop, coro):
+    """
+    Run a coroutine on `loop` from any thread and wait for it.
+
+    The coroutine body runs on the loop thread, which is what the connections
+    require, the calling thread only blocks on the result.
+    """
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+
+    if running is loop:
+        coro.close()
+        raise Exception(
+            "this would block the event loop the connection runs on, "
+            "use the *_async variant here"
+        )
+    return asyncio.run_coroutine_threadsafe(coro, loop).result()
 
 
 def run(coro):
     """
-    Run a coroutine from synchronous code, on the loop the connections
-    established with connect() live on.
+    Run a coroutine from blocking code, on the loop the connections established
+    with the synchronous connect() live on.
 
     Use it instead of asyncio.run(): a connection is bound to one loop, and
     asyncio.run() creates a new one every time.
     """
-    loop = _get_default_loop()
-    if loop.is_running():
-        coro.close()
-        raise Exception("infinistore.run() can not be called from a running event loop")
-    return loop.run_until_complete(coro)
+    return _submit(_get_background_loop(), coro)
 
 
 def _settle(future, ret, message):
@@ -381,7 +416,7 @@ class InfinityConnection:
             loop = None
 
         if loop is None:
-            loop = _get_default_loop()
+            loop = _get_background_loop()
 
         self._loop = loop
         return loop
@@ -401,16 +436,36 @@ class InfinityConnection:
             )
         return self._loop
 
+    def _is_loop_thread(self):
+        try:
+            return asyncio.get_running_loop() is self._loop
+        except RuntimeError:
+            return False
+
+    def _call_on_loop(self, fn):
+        """
+        Run a plain function on the connection's loop thread.
+
+        Only for calls which complete right away, like closing the handles or
+        registering a memory region. Inline when the caller is already on the
+        loop, otherwise handed over to it.
+        """
+        if self._loop is None or self._is_loop_thread():
+            return fn()
+
+        async def _wrapper():
+            return fn()
+
+        return _submit(self._loop, _wrapper())
+
     def _run_sync(self, coro):
-        """Drive a coroutine from synchronous code."""
-        loop = self._ensure_loop()
-        if loop.is_running():
-            coro.close()
-            raise Exception(
-                "the sync API can not be called from a running event loop, "
-                "use the *_async variant"
-            )
-        return loop.run_until_complete(coro)
+        """
+        Run a coroutine on this connection's loop and wait for it.
+
+        Callable from any thread except the loop's own: the work happens on the
+        loop thread, the caller only blocks on the result.
+        """
+        return _submit(self._ensure_loop(), coro)
 
     async def connect_async(self):
         """
@@ -489,8 +544,11 @@ class InfinityConnection:
     def close(self):
         """
         Closes the connection to the Infinistore instance.
+
+        Callable from any thread and from inside a coroutine: the handles are
+        always closed on the loop thread.
         """
-        self.conn.close()
+        self._call_on_loop(self.conn.close)
 
     async def tcp_read_cache_async(self, key: str, **kwargs) -> np.ndarray:
         """
@@ -809,7 +867,10 @@ class InfinityConnection:
         if not self.rdma_connected:
             raise Exception("this function is only valid for connected rdma")
 
-        ret = self.conn.register_mr(ptr, size)
+        # NOTE: this pins the pages, so it holds up the loop for as long as that
+        # takes. It is a setup time call, and it has to happen on the loop
+        # because the map it writes is read there when requests are posted.
+        ret = self._call_on_loop(lambda: self.conn.register_mr(ptr, size))
         if ret < 0:
             raise Exception("register memory region failed")
         return ret
