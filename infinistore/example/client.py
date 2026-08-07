@@ -63,7 +63,7 @@ if __name__ == "__main__":
     rdma_conn = InfinityConnection(config)
 
     try:
-        rdma_conn.connect()
+        infinistore.run(rdma_conn.connect_async())
         m = [
             ("cpu", "cuda:0"),
             ("cuda:0", "cuda:1"),

@@ -106,7 +106,7 @@ def test_basic_read_write_cache(server, dtype):
     config.connection_type = infinistore.TYPE_RDMA
 
     conn = infinistore.InfinityConnection(config)
-    conn.connect()
+    infinistore.run(conn.connect_async())
 
     # key is random string
     key = generate_random_string(10)
@@ -130,7 +130,7 @@ def test_basic_read_write_cache(server, dtype):
     conn.close()
 
     conn = infinistore.InfinityConnection(config)
-    conn.connect()
+    infinistore.run(conn.connect_async())
 
     dst = torch.zeros(4096, device="cuda:0", dtype=dtype)
 
@@ -170,7 +170,7 @@ def test_batch_read_write_cache(server, separated_gpu):
         dst_device = "cuda:0"
 
     conn = infinistore.InfinityConnection(config)
-    conn.connect()
+    infinistore.run(conn.connect_async())
 
     num_of_blocks = 10
     block_size = 4096
@@ -223,7 +223,7 @@ def test_multiple_clients(num_clients):
         config.connection_type = infinistore.TYPE_RDMA
 
         conn = infinistore.InfinityConnection(config)
-        conn.connect()
+        infinistore.run(conn.connect_async())
 
         # key is random string
         key = generate_random_string(10)
@@ -245,7 +245,7 @@ def test_multiple_clients(num_clients):
         conn.close()
 
         conn = infinistore.InfinityConnection(config)
-        conn.connect()
+        infinistore.run(conn.connect_async())
 
         dst = torch.zeros(4096, device="cuda:0", dtype=torch.float32)
         conn.register_mr(dst.data_ptr(), dst.numel() * dst.element_size())
@@ -273,14 +273,14 @@ def test_key_check(server):
         connection_type=infinistore.TYPE_RDMA,
     )
     conn = infinistore.InfinityConnection(config)
-    conn.connect()
+    infinistore.run(conn.connect_async())
     key = generate_random_string(5)
     src = torch.randn(4096, device="cuda", dtype=torch.float32)
     conn.register_mr(src.data_ptr(), src.numel() * src.element_size())
     torch.cuda.synchronize(src.device)
 
     infinistore.run(conn.rdma_write_cache_async([(key, 0)], 4096 * 4, src.data_ptr()))
-    assert conn.check_exist(key)
+    assert infinistore.run(conn.check_exist_async(key))
     conn.close()
 
 
@@ -293,7 +293,7 @@ def test_get_match_last_index(server):
         connection_type=infinistore.TYPE_RDMA,
     )
     conn = infinistore.InfinityConnection(config)
-    conn.connect()
+    infinistore.run(conn.connect_async())
     src = torch.randn(4096, device="cuda", dtype=torch.float32)
     torch.cuda.synchronize(src.device)
 
@@ -303,7 +303,12 @@ def test_get_match_last_index(server):
             [("key1", 0), ("key2", 1024), ("key3", 2048)], 1024 * 4, src.data_ptr()
         )
     )
-    assert conn.get_match_last_index(["A", "B", "C", "key1", "D", "E"]) == 3
+    assert (
+        infinistore.run(
+            conn.get_match_last_index_async(["A", "B", "C", "key1", "D", "E"])
+        )
+        == 3
+    )
     conn.close()
 
 
@@ -348,10 +353,10 @@ def test_upload_cpu_download_gpu(server):
         connection_type=infinistore.TYPE_RDMA,
     )
     src_conn = infinistore.InfinityConnection(src_config)
-    src_conn.connect()
+    infinistore.run(src_conn.connect_async())
 
     dst_conn = infinistore.InfinityConnection(dst_config)
-    dst_conn.connect()
+    infinistore.run(dst_conn.connect_async())
 
     key = generate_random_string(5)
     src = torch.randn(4096, dtype=torch.float32, device="cpu")
@@ -470,7 +475,7 @@ def test_delete_keys(server, test_dtype):
         connection_type=infinistore.TYPE_RDMA,
     )
     conn = infinistore.InfinityConnection(config)
-    conn.connect()
+    infinistore.run(conn.connect_async())
 
     src_tensor = torch.randn(BLOCK_SIZE, device="cuda", dtype=test_dtype)
     keys = [generate_random_string(10) for i in range(KEY_COUNT)]
@@ -492,15 +497,15 @@ def test_delete_keys(server, test_dtype):
 
     # Check all the keys exist
     for i in range(KEY_COUNT):
-        assert conn.check_exist(keys[i])
+        assert infinistore.run(conn.check_exist_async(keys[i]))
 
     # Delete the keys at index 0 and 2
-    assert conn.delete_keys([keys[0], keys[2]]) == 2
+    assert infinistore.run(conn.delete_keys_async([keys[0], keys[2]])) == 2
 
     # Verify the correctness
-    assert conn.check_exist(keys[1])
-    assert not conn.check_exist(keys[0])
-    assert not conn.check_exist(keys[2])
+    assert infinistore.run(conn.check_exist_async(keys[1]))
+    assert not infinistore.run(conn.check_exist_async(keys[0]))
+    assert not infinistore.run(conn.check_exist_async(keys[2]))
     conn.close()
 
 
@@ -517,15 +522,15 @@ def test_simple_tcp_read_write(server):
 
     try:
         conn = infinistore.InfinityConnection(config)
-        conn.connect()
+        infinistore.run(conn.connect_async())
         key = generate_random_string(10)
         size = 256 * 1024
         src = bytearray(size)
         for i in range(size):
             src[i] = i % 200
-        conn.tcp_write_cache(key, get_ptr(src), len(src))
+        infinistore.run(conn.tcp_write_cache_async(key, get_ptr(src), len(src)))
 
-        dst = conn.tcp_read_cache(key)
+        dst = infinistore.run(conn.tcp_read_cache_async(key))
         assert len(dst) == len(src)
         for i in range(len(src)):
             assert dst[i] == src[i]
@@ -542,14 +547,14 @@ def test_overwrite_tcp(server):
 
     try:
         conn = infinistore.InfinityConnection(config)
-        conn.connect()
+        infinistore.run(conn.connect_async())
         key = generate_random_string(10)
         size = 256 * 1024
         src = bytearray(size)
         for i in range(size):
             src[i] = i % 200
-        conn.tcp_write_cache(key, get_ptr(src), len(src))
-        dst = conn.tcp_read_cache(key)
+        infinistore.run(conn.tcp_write_cache_async(key, get_ptr(src), len(src)))
+        dst = infinistore.run(conn.tcp_read_cache_async(key))
         assert len(dst) == len(src)
         for i in range(len(src)):
             assert dst[i] == src[i]
@@ -558,8 +563,8 @@ def test_overwrite_tcp(server):
         src = bytearray(size)
         for i in range(size):
             src[i] = i % 100
-        conn.tcp_write_cache(key, get_ptr(src), len(src))
-        dst = conn.tcp_read_cache(key)
+        infinistore.run(conn.tcp_write_cache_async(key, get_ptr(src), len(src)))
+        dst = infinistore.run(conn.tcp_read_cache_async(key))
         assert len(dst) == len(src)
     finally:
         conn.close()

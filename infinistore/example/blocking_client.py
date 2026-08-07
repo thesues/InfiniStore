@@ -28,7 +28,7 @@ def get_ptr(buf):
 def main():
     conn = infinistore.InfinityConnection(config)
     # no event loop needed, this starts one on a background thread
-    conn.connect()
+    infinistore.run(conn.connect_async())
 
     try:
         # ---- plain blocking calls ----
@@ -37,10 +37,10 @@ def main():
         for i in range(len(src)):
             src[i] = i % 256
 
-        conn.tcp_write_cache(key, get_ptr(src), len(src))
-        assert conn.check_exist(key)
+        infinistore.run(conn.tcp_write_cache_async(key, get_ptr(src), len(src)))
+        assert infinistore.run(conn.check_exist_async(key))
 
-        dst = conn.tcp_read_cache(key)
+        dst = infinistore.run(conn.tcp_read_cache_async(key))
         assert bytes(dst) == bytes(src)
         print(f"round trip of {len(src)} bytes done")
 
@@ -56,8 +56,10 @@ def main():
 
                 for i in range(10):
                     k = f"worker-{n}-{i}"
-                    conn.tcp_write_cache(k, get_ptr(buf), len(buf))
-                    got = conn.tcp_read_cache(k)
+                    infinistore.run(
+                        conn.tcp_write_cache_async(k, get_ptr(buf), len(buf))
+                    )
+                    got = infinistore.run(conn.tcp_read_cache_async(k))
                     assert bytes(got) == bytes(buf)
             except Exception as e:  # noqa: BLE001
                 errors.append(f"worker {n}: {e!r}")
@@ -71,7 +73,9 @@ def main():
         assert not errors, errors
         print("8 threads x 10 round trips done")
 
-        deleted = conn.delete_keys([f"worker-{n}-0" for n in range(8)])
+        deleted = infinistore.run(
+            conn.delete_keys_async([f"worker-{n}-0" for n in range(8)])
+        )
         print(f"deleted {deleted} keys")
     finally:
         conn.close()

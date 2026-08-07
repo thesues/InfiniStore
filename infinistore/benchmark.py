@@ -133,7 +133,7 @@ def run(args):
 
     conn = infinistore.InfinityConnection(config)
     try:
-        conn.connect()
+        infinistore.run(conn.connect_async())
 
         # rdma support GPUDirect RDMA, so we can use cuda tensor
         if args.rdma:
@@ -202,7 +202,11 @@ def run(args):
                     for j in range(n):
                         key = blocks[i * n + j][0]
                         ptr = src_tensor.data_ptr() + blocks[i * n + j][1]
-                        conn.tcp_write_cache(key, ptr, block_size * element_size)
+                        infinistore.run(
+                            conn.tcp_write_cache_async(
+                                key, ptr, block_size * element_size
+                            )
+                        )
 
             # wait for all of them to finish
             if args.rdma:
@@ -226,7 +230,7 @@ def run(args):
                     for j in range(n):
                         key = blocks[i * n + j][0]
                         # ptr = dst_tensor.data_ptr() + blocks[i*n + j][1]
-                        ret = conn.tcp_read_cache(key)
+                        ret = infinistore.run(conn.tcp_read_cache_async(key))
                         assert len(ret) == block_size * element_size
                         # copy data from ret_value to dst_tensor
                         ret_tensor = torch.from_numpy(ret).view(torch.float32)

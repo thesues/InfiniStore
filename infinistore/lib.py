@@ -88,11 +88,13 @@ def _submit(loop, coro):
     except RuntimeError:
         running = None
 
-    if running is loop:
+    if running is not None:
+        # blocking here would stall the loop this thread is running, and if it is
+        # the connection's own loop it would never make progress at all
         coro.close()
         raise Exception(
-            "this would block the event loop the connection runs on, "
-            "use the *_async variant here"
+            "can not block on a coroutine from a running event loop, "
+            "await the *_async variant instead"
         )
     return asyncio.run_coroutine_threadsafe(coro, loop).result()
 
@@ -404,22 +406,20 @@ class InfinityConnection:
 
     def _ensure_loop(self):
         """
-        Pick the loop this connection runs on: the caller's if one is running,
-        otherwise the background loop, started on first use.
+        Bind this connection to the loop it is being connected on.
+
+        Called from connect_async(), so there always is a running loop: either
+        the caller's, or the one infinistore.run() drives.
         """
-        if self._loop is not None:
-            return self._loop
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-
-        if loop is None:
-            loop = _get_background_loop()
-
-        self._loop = loop
-        return loop
+        if self._loop is None:
+            try:
+                self._loop = asyncio.get_running_loop()
+            except RuntimeError:
+                raise Exception(
+                    "connect_async() has to be awaited on an event loop, "
+                    "blocking callers use infinistore.run(conn.connect_async())"
+                )
+        return self._loop
 
     def _bound_loop(self):
         """The loop the connection is on, checked against the running one."""
@@ -458,15 +458,6 @@ class InfinityConnection:
 
         return _submit(self._loop, _wrapper())
 
-    def _run_sync(self, coro):
-        """
-        Run a coroutine on this connection's loop and wait for it.
-
-        Callable from any thread except the loop's own: the work happens on the
-        loop thread, the caller only blocks on the result.
-        """
-        return _submit(self._ensure_loop(), coro)
-
     async def connect_async(self):
         """
         Asynchronously establishes a connection based on the configuration.
@@ -478,6 +469,9 @@ class InfinityConnection:
             Exception: If the initialization of the remote connection fails.
             Exception: If the setup of the RDMA connection fails.
         """
+        if self.rdma_connected:
+            raise Exception("Already connected to remote instance")
+
         loop = self._ensure_loop()
         self.config.host_addr = self.resolve_hostname(self.config.host_addr)
 
@@ -523,23 +517,6 @@ class InfinityConnection:
             return infos[0][4][0]
         except socket.gaierror as e:
             raise Exception(f"Failed to resolve hostname '{hostname}': {e}")
-
-    def connect(self):
-        """
-        Establishes a connection to the Infinistore instance based on the configuration.
-
-        This drives a private event loop, so it can not be called while an event
-        loop is running, use connect_async() there.
-
-        Raises:
-            Exception: If already connected to a remote instance.
-            Exception: If failed to initialize remote connection.
-            Exception: If failed to setup RDMA connection.
-        """
-        if self.rdma_connected:
-            raise Exception("Already connected to remote instance")
-
-        self._run_sync(self.connect_async())
 
     def close(self):
         """
@@ -619,34 +596,6 @@ class InfinityConnection:
         if self.conn.w_tcp(key, ptr, size, _callback) < 0:
             raise Exception("Failed to write to infinistore")
         await future
-
-    def tcp_read_cache(self, key: str, **kwargs) -> np.ndarray:
-        """
-        Retrieve a single cached item from the TCP connection.
-
-        Parameters:
-        key (str): The key associated with the cached item.
-        ``**kwargs``: Additional keyword arguments.
-
-        Returns:
-        np.ndarray: The cached item retrieved from the TCP connection.
-        """
-        return self._run_sync(self.tcp_read_cache_async(key, **kwargs))
-
-    def tcp_write_cache(self, key: str, ptr: int, size: int, **kwargs):
-        """
-        Writes a single cache entry to the remote memory using TCP.
-
-        Args:
-            key (str): The key of the cache entry to write.
-            ptr (int): The pointer to the memory location holding the data.
-            size (int): The size of the data to write.
-
-        Raises:
-            Exception: If the key is empty, the size is 0, the pointer is 0, or
-                the write operation fails.
-        """
-        return self._run_sync(self.tcp_write_cache_async(key, ptr, size, **kwargs))
 
     async def rdma_write_cache_async(
         self, blocks: List[Tuple[str, int]], block_size: int, ptr: int
@@ -788,21 +737,6 @@ class InfinityConnection:
         ret = await future
         return ret == 0
 
-    def check_exist(self, key: str):
-        """
-        Check if a given key exists in the store.
-
-        Args:
-            key (str): The key to check for existence.
-
-        Returns:
-            bool: True if the key exists, False otherwise.
-
-        Raises:
-            Exception: If there is an error checking the key's existence.
-        """
-        return self._run_sync(self.check_exist_async(key))
-
     async def get_match_last_index_async(self, keys: List[str]):
         """
         Retrieve the last index of a match for the given keys.
@@ -819,21 +753,6 @@ class InfinityConnection:
         if self.conn.get_match_last_index(keys, _callback) < 0:
             raise Exception("can't find a match")
         return await future
-
-    def get_match_last_index(self, keys: List[str]):
-        """
-        Retrieve the last index of a match for the given keys.
-
-        Args:
-            keys (List[str]): A list of string keys to search for matches.
-
-        Returns:
-            int: The last index of a match.
-
-        Raises:
-            Exception: If no match is found (i.e., if the return value is negative).
-        """
-        return self._run_sync(self.get_match_last_index_async(keys))
 
     @singledispatchmethod
     def register_mr(self, arg: Union[int], size: Optional[int] = None):
@@ -899,18 +818,3 @@ class InfinityConnection:
                 "somethings are wrong, not all the specified keys were deleted"
             )
         return await future
-
-    def delete_keys(self, keys: List[str]):
-        """
-        Delete a list of keys
-
-        Args:
-            keys (List[str]): The list of string keys to delete
-
-        Returns:
-            int: The count of the deleted keys
-
-        Raises:
-            Exception: If there is something wrong(return value is -1)
-        """
-        return self._run_sync(self.delete_keys_async(keys))

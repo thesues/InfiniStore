@@ -26,7 +26,7 @@ config = infinistore.ClientConfig(
 def main():
     try:
         conn = infinistore.InfinityConnection(config)
-        conn.connect()
+        infinistore.run(conn.connect_async())
         key = generate_uuid()
 
         size = 128 * 1024
@@ -38,13 +38,15 @@ def main():
         now = time.time()
         N = 1000
         for i in range(N):
-            conn.tcp_write_cache(key + str(i), get_ptr(src), len(src))
+            infinistore.run(
+                conn.tcp_write_cache_async(key + str(i), get_ptr(src), len(src))
+            )
         print("TCP write time taken: ", time.time() - now)
 
         now = time.time()
         ret = []
         for i in range(N):
-            ret.append(conn.tcp_read_cache(key + str(i)))
+            ret.append(infinistore.run(conn.tcp_read_cache_async(key + str(i))))
         print("TCP read Time taken: ", time.time() - now)
 
         assert len(ret) == len(src)
