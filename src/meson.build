@@ -58,6 +58,7 @@ ext_sources = [
   'ibv_helper.cpp',
   'mempool.cpp',
   'rdma.cpp',
+  'rdma_conn.cpp',
   'pybind.cpp'
 ]
 
