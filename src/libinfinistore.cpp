@@ -50,8 +50,7 @@ Connection::~Connection() {
     close_conn();
 }
 
-int Connection::init_connection(client_config_t config, unsigned long loop_ptr,
-                                ResultCallback cb) {
+int Connection::init_connection(client_config_t config, unsigned long loop_ptr, ResultCallback cb) {
     signal(SIGSEGV, signal_handler);
     signal(SIGABRT, signal_handler);
     signal(SIGBUS, signal_handler);
@@ -74,27 +73,26 @@ int Connection::setup_rdma(client_config_t config, ResultCallback cb) {
 
     // exchange the connection information with the server over the tcp connection
     rdma_conn_info_t local_info = rdma_.local_info();
-    std::vector<char> head =
-        make_head(OP_RDMA_EXCHANGE, &local_info, sizeof(rdma_conn_info_t));
+    std::vector<char> head = make_head(OP_RDMA_EXCHANGE, &local_info, sizeof(rdma_conn_info_t));
 
-    return tcp_.request(
-        std::move(head), NULL, 0, RespSpec::fixed(sizeof(rdma_conn_info_t)),
-        [this, cb](int return_code, std::vector<unsigned char> body) {
-            if (return_code != FINISH) {
-                ERROR("Failed to exchange connection information, return code: {}", return_code);
-                cb(-1);
-                return;
-            }
-            if (body.size() != sizeof(rdma_conn_info_t)) {
-                ERROR("Failed to receive remote connection information");
-                cb(-1);
-                return;
-            }
+    return tcp_.request(std::move(head), NULL, 0, RespSpec::fixed(sizeof(rdma_conn_info_t)),
+                        [this, cb](int return_code, std::vector<unsigned char> body) {
+                            if (return_code != FINISH) {
+                                ERROR("Failed to exchange connection information, return code: {}",
+                                      return_code);
+                                cb(-1);
+                                return;
+                            }
+                            if (body.size() != sizeof(rdma_conn_info_t)) {
+                                ERROR("Failed to receive remote connection information");
+                                cb(-1);
+                                return;
+                            }
 
-            rdma_conn_info_t remote_info;
-            memcpy(&remote_info, body.data(), sizeof(rdma_conn_info_t));
-            cb(rdma_.connect(loop_, remote_info));
-        });
+                            rdma_conn_info_t remote_info;
+                            memcpy(&remote_info, body.data(), sizeof(rdma_conn_info_t));
+                            cb(rdma_.connect(loop_, remote_info));
+                        });
 }
 
 int Connection::check_exist(const std::string &key, ResultCallback cb) {

@@ -147,9 +147,7 @@ SendBuffer *RdmaConnection::get_send_buffer() {
     return buffer;
 }
 
-void RdmaConnection::release_send_buffer(SendBuffer *buffer) {
-    send_buffers_.push_back(buffer);
-}
+void RdmaConnection::release_send_buffer(SendBuffer *buffer) { send_buffers_.push_back(buffer); }
 
 bool RdmaConnection::on_loop_thread() const {
     uv_thread_t self = uv_thread_self();

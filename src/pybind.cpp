@@ -73,15 +73,15 @@ PYBIND11_MODULE(_infinistore, m) {
             "r_tcp",
             [](Connection &self, const std::string &key,
                std::function<void(int, py::object)> callback) {
-                return self.r_tcp(key, [callback](int return_code,
-                                                  std::vector<unsigned char> body) {
-                    py::gil_scoped_acquire acquire;
-                    if (return_code != FINISH) {
-                        callback(return_code, py::none());
-                        return;
-                    }
-                    callback(return_code, as_pyarray(std::move(body)));
-                });
+                return self.r_tcp(key,
+                                  [callback](int return_code, std::vector<unsigned char> body) {
+                                      py::gil_scoped_acquire acquire;
+                                      if (return_code != FINISH) {
+                                          callback(return_code, py::none());
+                                          return;
+                                      }
+                                      callback(return_code, as_pyarray(std::move(body)));
+                                  });
             },
             "Read remote memory using TCP")
         .def(
@@ -103,8 +103,7 @@ PYBIND11_MODULE(_infinistore, m) {
         .def("check_exist", &Connection::check_exist, "check if the key exists in the store")
         .def("get_match_last_index", &Connection::get_match_last_index,
              "get the last index of a key list which is in the store")
-        .def("delete_keys", &Connection::delete_keys,
-             "delete a list of keys which are in store")
+        .def("delete_keys", &Connection::delete_keys, "delete a list of keys which are in store")
         .def(
             "register_mr",
             [](Connection &self, uintptr_t ptr, size_t ptr_region_size) {

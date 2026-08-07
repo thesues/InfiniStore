@@ -7,7 +7,6 @@ import signal
 import subprocess
 import random
 import string
-import asyncio
 import json
 import ctypes
 from multiprocessing import Process
@@ -184,8 +183,7 @@ def test_batch_read_write_cache(server, separated_gpu):
         # write/read 3 times
         for i in range(3):
             keys = [generate_random_string(num_of_blocks) for i in range(10)]
-            await asyncio.to_thread(
-                conn.register_mr,
+            conn.register_mr(
                 src_tensor.data_ptr(),
                 src_tensor.numel() * src_tensor.element_size(),
             )
@@ -201,9 +199,7 @@ def test_batch_read_write_cache(server, separated_gpu):
             dst = torch.zeros(
                 num_of_blocks * block_size, device=dst_device, dtype=torch.float32
             )
-            await asyncio.to_thread(
-                conn.register_mr, dst.data_ptr(), dst.numel() * dst.element_size()
-            )
+            conn.register_mr(dst.data_ptr(), dst.numel() * dst.element_size())
 
             await conn.rdma_read_cache_async(
                 blocks_offsets, block_size * 4, dst.data_ptr()
@@ -396,7 +392,7 @@ def test_async_api(server):
             conn.register_mr(src.data_ptr(), src.numel() * src.element_size())
             conn.register_mr(dst.data_ptr(), dst.numel() * dst.element_size())
 
-        await asyncio.to_thread(register_mr)
+        register_mr()
         await conn.rdma_write_cache_async([(key, 0)], 4096 * 4, src.data_ptr())
         await conn.rdma_read_cache_async([(key, 0)], 4096 * 4, dst.data_ptr())
 
@@ -420,9 +416,7 @@ def test_read_non_exist_key(server):
         try:
             await conn.connect_async()
             dst = torch.zeros(4096, device="cuda", dtype=torch.float32)
-            await asyncio.to_thread(
-                conn.register_mr, dst.data_ptr(), dst.numel() * dst.element_size()
-            )
+            conn.register_mr(dst.data_ptr(), dst.numel() * dst.element_size())
             with pytest.raises(infinistore.InfiniStoreKeyNotFound):
                 await conn.rdma_read_cache_async(
                     [("non_exist_key", 0)], 4096 * 4, dst.data_ptr()

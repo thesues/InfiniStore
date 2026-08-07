@@ -101,9 +101,8 @@ class RdmaConnection {
    private:
     // build a RemoteMetaRequest and send it over the QP. Takes ownership of info:
     // it is deleted here on failure, and by the completion handler on success.
-    int post_meta_request(const std::vector<std::string> &keys,
-                          const std::vector<size_t> &offsets, int block_size, void *base_ptr,
-                          char op, rdma_info_base *info);
+    int post_meta_request(const std::vector<std::string> &keys, const std::vector<size_t> &offsets,
+                          int block_size, void *base_ptr, char op, rdma_info_base *info);
     void post_recv_ack(rdma_info_base *info);
     // true when the caller is on the loop this connection runs on
     bool on_loop_thread() const;

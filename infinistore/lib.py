@@ -572,7 +572,8 @@ class InfinityConnection:
                 return
             if code == 404:
                 loop.call_soon_threadsafe(
-                    future.set_exception, InfiniStoreKeyNotFound(f"key not found: {key}")
+                    future.set_exception,
+                    InfiniStoreKeyNotFound(f"key not found: {key}"),
                 )
             elif code != 200:
                 loop.call_soon_threadsafe(

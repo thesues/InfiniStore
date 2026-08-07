@@ -25,8 +25,7 @@ void TcpConnection::alloc_buffer_cb(uv_handle_t *handle, size_t suggested_size, 
     buf->len = buf->base ? suggested_size : 0;
 }
 
-int TcpConnection::connect(uv_loop_t *loop, const std::string &host, int port,
-                           ConnectCallback cb) {
+int TcpConnection::connect(uv_loop_t *loop, const std::string &host, int port, ConnectCallback cb) {
     if (handle_ != NULL) {
         ERROR("connection is already in use");
         return -1;
