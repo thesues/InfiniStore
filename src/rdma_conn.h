@@ -1,13 +1,11 @@
 #ifndef RDMA_CONN_H
 #define RDMA_CONN_H
 
-#include <atomic>
-#include <boost/lockfree/spsc_queue.hpp>
-#include <chrono>
+#include <uv.h>
+
+#include <deque>
 #include <functional>
-#include <future>
 #include <string>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -57,15 +55,14 @@ struct rdma_read_info : rdma_info_base {
 };
 
 /*
-The client side RDMA connection: device, QP, memory regions, send buffers and the
-completion queue handler thread. It does not do any TCP/protocol work, the owner
-(Connection) carries the connection info of both sides over its own socket and
-hands it over through local_info()/connect().
+The client side RDMA connection: device, QP, memory regions and send buffers. It
+does not do any TCP/protocol work, the owner(Connection) carries the connection
+info of both sides over its own socket and hands it over through
+local_info()/connect().
 
-Threading: every method is meant to be called from a single thread, the only other
-thread involved is the completion handler started by connect(). send_buffers_ is a
-single producer(that thread) single consumer(the caller) queue, so post_read and
-post_write must not be called concurrently from several threads.
+The completion queue is watched by the caller's libuv loop, the same way the
+server does it, so everything here runs on the loop thread and no state is
+shared across threads.
 */
 class RdmaConnection {
    public:
@@ -79,19 +76,17 @@ class RdmaConnection {
 
     rdma_conn_info_t local_info();
 
-    // bring the QP up against the remote side and start the completion handler
-    int connect(const rdma_conn_info_t &remote_info);
+    // bring the QP up against the remote side and start watching the completion
+    // channel on the given loop
+    int connect(uv_loop_t *loop, const rdma_conn_info_t &remote_info);
 
-    /*
-    Stop the completion handler thread. Idempotent.
-
-    This can not be done in the destructor: the completion callbacks call back into
-    python, so they need the GIL, while the destructor is usually called from python
-    with the GIL held. Waiting for the thread there would deadlock, which is why the
-    owner has to call this explicitly first.
-    */
+    // stop watching the completion queue, idempotent
     void stop();
 
+    /*
+    Register a memory region. This pins the pages, it takes a while for a large
+    region and it is synchronous, so do not call it from the loop thread.
+    */
     int register_mr(void *base_ptr, size_t ptr_region_size);
 
     int post_read(const std::vector<std::string> &keys, const std::vector<size_t> &offsets,
@@ -106,11 +101,9 @@ class RdmaConnection {
                           const std::vector<size_t> &offsets, int block_size, void *base_ptr,
                           char op, rdma_info_base *info);
     void post_recv_ack(rdma_info_base *info);
-    void cq_handler();
-    // post a work request which is only there to wake the completion handler up
-    int wake_cq_thread();
-    // true once the completion handler has returned
-    bool cq_thread_exited();
+    // one completion channel event: ack it, rearm and drain the CQ
+    void poll_cq();
+    static void poll_cb(uv_poll_t *handle, int status, int events);
 
     SendBuffer *get_send_buffer();
     void release_send_buffer(SendBuffer *buffer);
@@ -127,15 +120,14 @@ class RdmaConnection {
     This is MAX_RECV_WR not MAX_SEND_WR,
     because server also has the same number of buffers
     */
-    boost::lockfree::spsc_queue<SendBuffer *> send_buffers_{MAX_RECV_WR};
+    std::deque<SendBuffer *> send_buffers_;
 
-    std::thread cq_thread_;
-    // set by the completion handler right before it returns, so the destructor can
-    // wait for it with a timeout instead of blocking forever
-    std::promise<void> cq_exited_;
-    std::future<void> cq_exited_future_;
-
-    std::atomic<bool> stop_{false};
+    /*
+    Watches the completion channel. Heap allocated: libuv needs the memory of a
+    handle to stay valid until its close callback has run, which is after this
+    object may be gone.
+    */
+    uv_poll_t *poll_handle_ = NULL;
 };
 
 #endif  // RDMA_CONN_H

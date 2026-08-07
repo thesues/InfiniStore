@@ -8,6 +8,7 @@ from .lib import (
     LINK_ETHERNET,
     LINK_IB,
     register_server,
+    run,
     purge_kv_map,
     get_kvmap_len,
     InfiniStoreException,
@@ -18,6 +19,7 @@ from .lib import (
 __all__ = [
     "InfinityConnection",
     "register_server",
+    "run",
     "ClientConfig",
     "ServerConfig",
     "TYPE_RDMA",

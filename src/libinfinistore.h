@@ -28,6 +28,8 @@ to a callback means the request failed.
 class Connection {
     TcpConnection tcp_;
     RdmaConnection rdma_;
+    // the caller's loop, both connections run on it
+    uv_loop_t *loop_ = NULL;
 
    public:
     // result of a request, negative on error

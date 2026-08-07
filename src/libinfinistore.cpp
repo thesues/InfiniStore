@@ -40,10 +40,6 @@ bool body_to_int(const std::vector<unsigned char> &body, int *out) {
 
 }  // namespace
 
-/*
-because python will always hold GIL when doing ~Connection(), which could lead to deadlock,
-so we have to explicitly call close() to stop the rdma completion handler.
-*/
 void Connection::close_conn() {
     rdma_.stop();
     tcp_.close();
@@ -51,14 +47,7 @@ void Connection::close_conn() {
 
 Connection::~Connection() {
     INFO("destroying connection");
-
-    /*
-    rdma_.stop() is deliberately not called here: it waits for the completion
-    handler, whose callbacks need the GIL, and this destructor usually runs with the
-    GIL held. ~RdmaConnection() falls back to a bounded wait and leaks rather than
-    destroying resources the thread is still using.
-    */
-    tcp_.close();
+    close_conn();
 }
 
 int Connection::init_connection(client_config_t config, unsigned long loop_ptr,
@@ -69,13 +58,13 @@ int Connection::init_connection(client_config_t config, unsigned long loop_ptr,
     signal(SIGFPE, signal_handler);
     signal(SIGILL, signal_handler);
 
-    uv_loop_t *loop = (uv_loop_t *)loop_ptr;
-    if (loop == NULL) {
+    loop_ = (uv_loop_t *)loop_ptr;
+    if (loop_ == NULL) {
         ERROR("No event loop given");
         return -1;
     }
 
-    return tcp_.connect(loop, config.host_addr, config.service_port, cb);
+    return tcp_.connect(loop_, config.host_addr, config.service_port, cb);
 }
 
 int Connection::setup_rdma(client_config_t config, ResultCallback cb) {
@@ -104,7 +93,7 @@ int Connection::setup_rdma(client_config_t config, ResultCallback cb) {
 
             rdma_conn_info_t remote_info;
             memcpy(&remote_info, body.data(), sizeof(rdma_conn_info_t));
-            cb(rdma_.connect(remote_info));
+            cb(rdma_.connect(loop_, remote_info));
         });
 }
 

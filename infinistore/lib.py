@@ -40,6 +40,39 @@ def _uv_loop_ptr(loop):
     return PyCapsule_GetPointer(capsule, None)
 
 
+_default_loop = None
+
+
+def _get_default_loop():
+    """
+    The loop infinistore falls back to when the caller has none of its own.
+
+    It is process wide on purpose: connections established with the synchronous
+    connect() all live on it, so a coroutine may use several of them.
+    """
+    global _default_loop
+    if _default_loop is None or _default_loop.is_closed():
+        import uvloop
+
+        _default_loop = uvloop.new_event_loop()
+    return _default_loop
+
+
+def run(coro):
+    """
+    Run a coroutine from synchronous code, on the loop the connections
+    established with connect() live on.
+
+    Use it instead of asyncio.run(): a connection is bound to one loop, and
+    asyncio.run() creates a new one every time.
+    """
+    loop = _get_default_loop()
+    if loop.is_running():
+        coro.close()
+        raise Exception("infinistore.run() can not be called from a running event loop")
+    return loop.run_until_complete(coro)
+
+
 def _settle(future, ret, message):
     """Resolve a future from a C++ callback: negative means failure."""
     if future.done():
@@ -327,9 +360,8 @@ class InfinityConnection:
         self.config = config
 
         # the connection lives on this uv loop. It is the caller's loop when there
-        # is a running one, otherwise we run a private loop for the sync API.
+        # is a running one, otherwise the process wide fallback loop.
         self._loop = None
-        self._owns_loop = False
 
         # used for async io
         self.semaphore = asyncio.BoundedSemaphore(128)
@@ -349,10 +381,7 @@ class InfinityConnection:
             loop = None
 
         if loop is None:
-            import uvloop
-
-            loop = uvloop.new_event_loop()
-            self._owns_loop = True
+            loop = _get_default_loop()
 
         self._loop = loop
         return loop
@@ -462,10 +491,6 @@ class InfinityConnection:
         Closes the connection to the Infinistore instance.
         """
         self.conn.close()
-        if self._owns_loop and self._loop is not None and not self._loop.is_running():
-            self._loop.close()
-            self._loop = None
-            self._owns_loop = False
 
     async def tcp_read_cache_async(self, key: str, **kwargs) -> np.ndarray:
         """
@@ -595,8 +620,8 @@ class InfinityConnection:
         if not self.rdma_connected:
             raise Exception("this function is only valid for connected rdma")
 
+        loop = self._bound_loop()
         await self.semaphore.acquire()
-        loop = asyncio.get_running_loop()
         future = loop.create_future()
 
         keys, offsets = zip(*blocks)
@@ -653,8 +678,8 @@ class InfinityConnection:
             raise Exception("this function is only valid for connected rdma")
         pass
 
+        loop = self._bound_loop()
         await self.semaphore.acquire()
-        loop = asyncio.get_running_loop()
         future = loop.create_future()
 
         def _callback(code):

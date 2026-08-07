@@ -127,7 +127,7 @@ def test_basic_read_write_cache(server, dtype):
             [(key, 0)], len(src) * element_size, src_tensor.data_ptr()
         )
 
-    asyncio.run(run_write())
+    infinistore.run(run_write())
     conn.close()
 
     conn = infinistore.InfinityConnection(config)
@@ -142,7 +142,7 @@ def test_basic_read_write_cache(server, dtype):
             [(key, 0)], len(dst) * element_size, dst.data_ptr()
         )
 
-    asyncio.run(run_read())
+    infinistore.run(run_read())
     assert torch.equal(src_tensor, dst)
     conn.close()
 
@@ -210,7 +210,7 @@ def test_batch_read_write_cache(server, separated_gpu):
             )
             assert torch.equal(src_tensor.cpu(), dst.cpu())
 
-    asyncio.run(run())
+    infinistore.run(run())
     conn.close()
 
 
@@ -241,7 +241,7 @@ def test_multiple_clients(num_clients):
         )
         element_size = torch._utils._element_size(torch.float32)
 
-        asyncio.run(
+        infinistore.run(
             conn.rdma_write_cache_async(
                 [(key, 0)], 4096 * element_size, src_tensor.data_ptr()
             )
@@ -253,7 +253,7 @@ def test_multiple_clients(num_clients):
 
         dst = torch.zeros(4096, device="cuda:0", dtype=torch.float32)
         conn.register_mr(dst.data_ptr(), dst.numel() * dst.element_size())
-        asyncio.run(
+        infinistore.run(
             conn.rdma_read_cache_async([(key, 0)], 4096 * element_size, dst.data_ptr())
         )
         assert torch.equal(src_tensor, dst)
@@ -283,7 +283,7 @@ def test_key_check(server):
     conn.register_mr(src.data_ptr(), src.numel() * src.element_size())
     torch.cuda.synchronize(src.device)
 
-    asyncio.run(conn.rdma_write_cache_async([(key, 0)], 4096 * 4, src.data_ptr()))
+    infinistore.run(conn.rdma_write_cache_async([(key, 0)], 4096 * 4, src.data_ptr()))
     assert conn.check_exist(key)
     conn.close()
 
@@ -302,7 +302,7 @@ def test_get_match_last_index(server):
     torch.cuda.synchronize(src.device)
 
     conn.register_mr(src.data_ptr(), src.numel() * src.element_size())
-    asyncio.run(
+    infinistore.run(
         conn.rdma_write_cache_async(
             [("key1", 0), ("key2", 1024), ("key3", 2048)], 1024 * 4, src.data_ptr()
         )
@@ -333,7 +333,7 @@ def test_key_not_found(server):
         finally:
             conn.close()
 
-    asyncio.run(run())
+    infinistore.run(run())
 
 
 def test_upload_cpu_download_gpu(server):
@@ -370,7 +370,7 @@ def test_upload_cpu_download_gpu(server):
         await dst_conn.rdma_read_cache_async([(key, 0)], 4096 * 4, dst.data_ptr())
         assert torch.equal(src, dst.cpu())
 
-    asyncio.run(run())
+    infinistore.run(run())
     src_conn.close()
     dst_conn.close()
 
@@ -403,7 +403,7 @@ def test_async_api(server):
         assert torch.equal(src, dst)
         conn.close()
 
-    asyncio.run(run())
+    infinistore.run(run())
 
 
 def test_read_non_exist_key(server):
@@ -430,7 +430,7 @@ def test_read_non_exist_key(server):
         finally:
             conn.close()
 
-    asyncio.run(run())
+    infinistore.run(run())
 
 
 @pytest.mark.benchmark
@@ -494,7 +494,7 @@ def test_delete_keys(server, test_dtype):
             block_offsets, BLOB_SIZE * element_size, src_tensor.data_ptr()
         )
 
-    asyncio.run(run())
+    infinistore.run(run())
 
     # Check all the keys exist
     for i in range(KEY_COUNT):
