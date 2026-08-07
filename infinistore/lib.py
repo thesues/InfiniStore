@@ -405,7 +405,7 @@ class InfinityConnection:
     def _ensure_loop(self):
         """
         Pick the loop this connection runs on: the caller's if one is running,
-        otherwise a private one which the sync API drives with run_until_complete.
+        otherwise the background loop, started on first use.
         """
         if self._loop is not None:
             return self._loop
