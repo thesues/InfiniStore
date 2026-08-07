@@ -87,11 +87,23 @@ infinistore --service-port 12345 --dev-name mlx5_0 --link-type IB
 
 2. **Run InfiniStore Client**
 
+The client runs its IO on a libuv event loop. Which one depends on the caller:
+
+* code with an event loop of its own(asyncio) connects with ``await conn.connect_async()``
+  and the connection runs on that loop. It has to be a uvloop one.
+* blocking code just calls ``conn.connect()``, and InfiniStore runs a loop on a
+  background thread for it. The blocking calls are usable from any thread, and
+  ``infinistore.run(coro)`` drives the asynchronous RDMA operations.
+
+A connection stays on the loop it was established on.
+
 Check the following example code to run an InfiniStore client:
 
-* ```infinistore/example/client.py```
+* ```infinistore/example/blocking_client.py``` - no event loop in the application
+* ```infinistore/example/client.py``` - blocking code driving RDMA operations
 * ```infinistore/example/client_async.py```
 * ```infinistore/example/client_async_single.py```
+* ```infinistore/example/tcp_client.py```
 
 ## Run Within a vLLM Cluster
 

@@ -8,7 +8,6 @@ import string
 import argparse
 import uuid
 import asyncio
-import threading
 
 
 def parse_args():
@@ -112,14 +111,9 @@ def generate_uuid():
     return str(uuid.uuid4())
 
 
-def start_loop(loop):
-    asyncio.set_event_loop(loop)
-    loop.run_forever()
-
-
-loop = asyncio.new_event_loop()
-t = threading.Thread(target=start_loop, args=(loop,))
-t.start()
+async def _gather(coros):
+    """Run the coroutines concurrently, from blocking code."""
+    await asyncio.gather(*coros)
 
 
 def run(args):
@@ -194,45 +188,40 @@ def run(args):
 
             start = time.time()
 
-            futures = []
+            coros = []
             for i in range(steps):
                 if args.rdma:
-                    future = asyncio.run_coroutine_threadsafe(
+                    coros.append(
                         conn.rdma_write_cache_async(
                             blocks[i * n : i * n + n],
                             block_size * element_size,
                             src_tensor.data_ptr(),
-                        ),
-                        loop,
+                        )
                     )
-                    futures.append(future)
                 else:
                     for j in range(n):
                         key = blocks[i * n + j][0]
                         ptr = src_tensor.data_ptr() + blocks[i * n + j][1]
                         conn.tcp_write_cache(key, ptr, block_size * element_size)
 
-            # wait for all the futures to finish
+            # wait for all of them to finish
             if args.rdma:
-                for future in futures:
-                    future.result()
+                infinistore.run(_gather(coros))
             else:  # TCP
                 pass
 
             mid = time.time()
             write_sum += mid - start
-            futures = []
+            coros = []
             for i in range(steps):
                 if args.rdma:
-                    future = asyncio.run_coroutine_threadsafe(
+                    coros.append(
                         conn.rdma_read_cache_async(
                             blocks[i * n : i * n + n],
                             block_size * element_size,
                             dst_tensor.data_ptr(),
-                        ),
-                        loop,
+                        )
                     )
-                    futures.append(future)
                 else:
                     for j in range(n):
                         key = blocks[i * n + j][0]
@@ -247,8 +236,7 @@ def run(args):
                         )
 
             if args.rdma:
-                for future in futures:
-                    future.result()
+                infinistore.run(_gather(coros))
             else:  # TCP
                 pass
 
@@ -271,8 +259,6 @@ def run(args):
         assert torch.equal(src_tensor.cpu(), dst_tensor.cpu())
     finally:
         conn.close()
-        loop.call_soon_threadsafe(loop.stop)
-        t.join()
 
 
 if __name__ == "__main__":
