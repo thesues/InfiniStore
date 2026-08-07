@@ -38,11 +38,10 @@ async def main():
     src = bytearray(size)
     dst = memoryview(bytearray(size))
 
-    def register_mr():
-        rdma_conn.register_mr(get_ptr(src), len(src))
-        rdma_conn.register_mr(get_ptr(dst), len(dst))
-
-    await asyncio.to_thread(register_mr)
+    # register_mr runs on the loop this connection is on, no need to hand it to
+    # a thread. NOTE: it pins the pages, so it does hold up the loop meanwhile.
+    rdma_conn.register_mr(get_ptr(src), len(src))
+    rdma_conn.register_mr(get_ptr(dst), len(dst))
 
     # set src
     for i in range(size):
